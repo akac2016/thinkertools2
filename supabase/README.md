@@ -4,6 +4,7 @@ Run these in a new Supabase project SQL Editor, in order:
 
 1. `supabase/schema.sql`
 2. `supabase/seed.sql`
+3. `supabase/policies.sql` (optional now, recommended before client-side reads)
 
 ## Quick sanity checks
 
@@ -31,3 +32,5 @@ select count(*) from woi_turns;
 - RLS/auth hardening is intentionally deferred for speed.
 - Use server-side Supabase client/service role for writes in Next.js.
 - `updated_at` fields are present; set them in app update queries for now.
+- `supabase/policies.sql` creates read policies only; client-side writes remain blocked.
+- Run `supabase/policies-check.sql` to verify policy installation.
