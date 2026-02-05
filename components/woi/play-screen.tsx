@@ -29,6 +29,9 @@ export function WoiPlayScreen({ gameId }: { gameId: string }) {
 
   const [levelFilter, setLevelFilter] = useState<string>("all");
 
+  const moveOptions = useMemo(() => game?.template?.moves ?? [], [game?.template?.moves]);
+  const ruleOptions = useMemo(() => game?.template?.rules ?? [], [game?.template?.rules]);
+
   const loadGame = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -114,6 +117,7 @@ export function WoiPlayScreen({ gameId }: { gameId: string }) {
       setContent("");
       setMoveId("");
       setRuleId("");
+      setSelectedLevelForSubmit("");
       await loadGame();
     } catch (turnError) {
       setSubmitError(turnError instanceof Error ? turnError.message : "Failed to submit turn");
@@ -281,23 +285,35 @@ export function WoiPlayScreen({ gameId }: { gameId: string }) {
           </label>
 
           <label className="mt-3 block text-sm text-slate-700">
-            <span className="mb-1 block">Move ID (optional)</span>
-            <input
+            <span className="mb-1 block">Move (optional)</span>
+            <select
               value={moveId}
               onChange={(event) => setMoveId(event.target.value)}
-              placeholder="move UUID"
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-500"
-            />
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-500"
+            >
+              <option value="">No move</option>
+              {moveOptions.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
           </label>
 
           <label className="mt-3 block text-sm text-slate-700">
-            <span className="mb-1 block">Rule ID (optional)</span>
-            <input
+            <span className="mb-1 block">Rule (optional)</span>
+            <select
               value={ruleId}
               onChange={(event) => setRuleId(event.target.value)}
-              placeholder="rule UUID"
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-500"
-            />
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-500"
+            >
+              <option value="">No rule</option>
+              {ruleOptions.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
           </label>
 
           {submitError ? <InlineMessage kind="error">{submitError}</InlineMessage> : null}

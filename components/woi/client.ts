@@ -12,6 +12,10 @@ export type WoiTemplateSummary = {
   id: string;
   name: string;
   category: string | null;
+  objective?: string;
+  isPublic?: boolean;
+  moves?: WoiTemplateMoveOption[];
+  rules?: WoiTemplateRuleOption[];
 };
 
 export type WoiGameSummary = {
@@ -49,6 +53,31 @@ export type WoiGameDetail = WoiGameSummary & {
   players: WoiUser[];
 };
 
+export type WoiTemplateMoveOption = {
+  id: string;
+  label: string;
+  orderIndex: number | null;
+};
+
+export type WoiTemplateRuleOption = {
+  id: string;
+  label: string;
+  orderIndex: number | null;
+};
+
+export type WoiTeamSummary = {
+  id: string;
+  name: string;
+};
+
+export type WoiTemplateCatalogEntry = {
+  id: string;
+  name: string;
+  category: string | null;
+  objective: string;
+  isPublic: boolean;
+};
+
 export type PublicGameSummary = {
   id: string;
   question: string;
@@ -56,6 +85,11 @@ export type PublicGameSummary = {
   updatedAt: string;
   templateName: string;
   creator: WoiUser | null;
+};
+
+export type PublicGamesResult = {
+  query: string;
+  games: PublicGameSummary[];
 };
 
 export type ContextComment = {
@@ -202,6 +236,76 @@ function normalizeTemplate(value: unknown): WoiTemplateSummary | null {
     id,
     name: readStringValue(record, ["name", "template_name"], "Untitled template"),
     category: readNullableStringValue(record, ["category"]),
+    objective: readStringValue(record, ["objective"], ""),
+    isPublic: readBooleanValue(record, ["is_public", "isPublic"], false),
+  };
+}
+
+function normalizeTemplateMoveOption(value: unknown): WoiTemplateMoveOption | null {
+  const record = parseObject(value);
+  if (!record) {
+    return null;
+  }
+
+  const id = readStringValue(record, ["id", "move_id"]);
+  if (!id) {
+    return null;
+  }
+
+  return {
+    id,
+    label: readStringValue(record, ["move_text", "label", "name"], "Untitled move"),
+    orderIndex: readNumberValue(record, ["order_index", "orderIndex"]),
+  };
+}
+
+function normalizeTemplateRuleOption(value: unknown): WoiTemplateRuleOption | null {
+  const record = parseObject(value);
+  if (!record) {
+    return null;
+  }
+
+  const id = readStringValue(record, ["id", "rule_id"]);
+  if (!id) {
+    return null;
+  }
+
+  return {
+    id,
+    label: readStringValue(record, ["rule_text", "label", "name"], "Untitled rule"),
+    orderIndex: readNumberValue(record, ["order_index", "orderIndex"]),
+  };
+}
+
+function normalizeTeamSummary(value: unknown): WoiTeamSummary | null {
+  const record = parseObject(value);
+  if (!record) {
+    return null;
+  }
+
+  const id = readStringValue(record, ["id", "team_id"]);
+  if (!id) {
+    return null;
+  }
+
+  return {
+    id,
+    name: readStringValue(record, ["name", "team_name"], id),
+  };
+}
+
+function normalizeTemplateCatalogEntry(value: unknown): WoiTemplateCatalogEntry | null {
+  const template = normalizeTemplate(value);
+  if (!template) {
+    return null;
+  }
+
+  return {
+    id: template.id,
+    name: template.name,
+    category: template.category,
+    objective: template.objective ?? "",
+    isPublic: template.isPublic ?? false,
   };
 }
 
@@ -286,6 +390,18 @@ function normalizeGameDetail(value: unknown): WoiGameDetail {
     [];
 
   const levels = levelsSource.map((entry, index) => normalizeLevel(entry, index));
+  const templateMoves = (readArray(templateRecord, ["moves", "template_moves"]) ?? [])
+    .map((entry) => normalizeTemplateMoveOption(entry))
+    .filter((entry): entry is WoiTemplateMoveOption => Boolean(entry))
+    .sort(
+      (left, right) => (left.orderIndex ?? Number.MAX_SAFE_INTEGER) - (right.orderIndex ?? Number.MAX_SAFE_INTEGER),
+    );
+  const templateRules = (readArray(templateRecord, ["rules", "template_rules"]) ?? [])
+    .map((entry) => normalizeTemplateRuleOption(entry))
+    .filter((entry): entry is WoiTemplateRuleOption => Boolean(entry))
+    .sort(
+      (left, right) => (left.orderIndex ?? Number.MAX_SAFE_INTEGER) - (right.orderIndex ?? Number.MAX_SAFE_INTEGER),
+    );
   const players = playersSource
     .map((entry) => normalizeUser(entry))
     .filter((entry): entry is WoiUser => Boolean(entry));
@@ -305,13 +421,18 @@ function normalizeGameDetail(value: unknown): WoiGameDetail {
   return {
     ...summary,
     currentPlayer,
-    template:
-      summary.template ??
-      normalizeTemplate(templateRecord) ?? {
-        id: "unknown-template",
-        name: "Unknown template",
-        category: null,
-      },
+    template: {
+      ...(summary.template ??
+        normalizeTemplate(templateRecord) ?? {
+          id: "unknown-template",
+          name: "Unknown template",
+          category: null,
+          objective: "",
+          isPublic: false,
+        }),
+      moves: templateMoves,
+      rules: templateRules,
+    },
     turns: turnsSource.map((entry, index) => normalizeTurn(entry, index)),
     levels,
     players,
@@ -403,17 +524,38 @@ function normalizePublicGame(value: unknown, index: number): PublicGameSummary {
   };
 }
 
-export async function fetchPublicGames(query: string): Promise<PublicGameSummary[]> {
+export async function fetchPublicGames(query: string): Promise<PublicGamesResult> {
   const params = new URLSearchParams();
   if (query.trim()) {
-    params.set("query", query.trim());
+    params.set("q", query.trim());
   }
 
   const suffix = params.toString() ? `?${params.toString()}` : "";
   const payload = await apiFetch<unknown>(`/api/library/public-games${suffix}`);
+  const root = parseObject(payload) ?? {};
+  const resolvedQuery = readStringValue(root, ["query"], query.trim());
 
   const games = coerceListPayload(payload, ["games", "items", "results"]);
-  return games.map((entry, index) => normalizePublicGame(entry, index));
+  return {
+    query: resolvedQuery,
+    games: games.map((entry, index) => normalizePublicGame(entry, index)),
+  };
+}
+
+export async function fetchActorTeams(): Promise<WoiTeamSummary[]> {
+  const payload = await apiFetch<unknown>("/api/woi/teams");
+  const teams = coerceListPayload(payload, ["teams", "items", "results"]);
+  return teams
+    .map((entry) => normalizeTeamSummary(entry))
+    .filter((entry): entry is WoiTeamSummary => Boolean(entry));
+}
+
+export async function fetchTemplates(): Promise<WoiTemplateCatalogEntry[]> {
+  const payload = await apiFetch<unknown>("/api/woi/templates");
+  const templates = coerceListPayload(payload, ["templates", "items", "results"]);
+  return templates
+    .map((entry) => normalizeTemplateCatalogEntry(entry))
+    .filter((entry): entry is WoiTemplateCatalogEntry => Boolean(entry));
 }
 
 function normalizeComment(value: unknown, index: number): ContextComment {
