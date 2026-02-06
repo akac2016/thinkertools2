@@ -4,7 +4,6 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
-import { DemoUserField } from "@/components/shared/demo-user-field";
 import {
   createGame,
   fetchActorTeams,
@@ -140,8 +139,6 @@ export function WoiNewGameScreen() {
       title="Create New Game"
       subtitle="Create a WOI game using an existing template and launch the play loop."
     >
-      <DemoUserField />
-
       <WoiSection title="Game Setup">
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
           <div>
@@ -296,13 +293,13 @@ export function WoiNewGameScreen() {
             </p>
             <div className="mt-2 flex flex-wrap gap-2">
               <Link
-                href={`/woi/games/${createdGame.id}/play`}
+                href={`/woi/games/${createdGame.id}`}
                 className="rounded-md bg-emerald-700 px-3 py-2 text-xs font-semibold text-white transition hover:bg-emerald-600"
               >
                 Go to Play
               </Link>
               <Link
-                href={`/woi/games/${createdGame.id}/reflect`}
+                href={`/woi/games/${createdGame.id}?tab=reflect`}
                 className="rounded-md border border-emerald-300 bg-white px-3 py-2 text-xs font-semibold text-emerald-800 transition hover:bg-emerald-100"
               >
                 Open Reflect

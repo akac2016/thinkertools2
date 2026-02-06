@@ -4,7 +4,6 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { getDemoUserId } from "@/components/quipx/client";
-import { DemoUserField } from "@/components/shared/demo-user-field";
 import {
   fetchGameDetail,
   formatDateTime,
@@ -18,7 +17,7 @@ export function WoiPlayScreen({ gameId }: { gameId: string }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [demoUserId, setDemoUserId] = useState<string>(() => getDemoUserId());
+  const demoUserId = getDemoUserId();
 
   const [content, setContent] = useState("");
   const [selectedLevelForSubmit, setSelectedLevelForSubmit] = useState("");
@@ -131,13 +130,6 @@ export function WoiPlayScreen({ gameId }: { gameId: string }) {
       title="Play Game"
       subtitle="Track turn order, filter by level, and submit the next move."
     >
-      <DemoUserField
-        onApplied={(userId) => {
-          setDemoUserId(userId);
-          void loadGame();
-        }}
-      />
-
       {error ? <InlineMessage kind="error">{error}</InlineMessage> : null}
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
@@ -153,7 +145,7 @@ export function WoiPlayScreen({ gameId }: { gameId: string }) {
                   Games
                 </Link>
                 <Link
-                  href={`/woi/games/${gameId}/reflect`}
+                  href={`/woi/games/${gameId}?tab=reflect`}
                   className="rounded-md bg-slate-900 px-3 py-2 text-xs font-medium text-white transition hover:bg-slate-700"
                 >
                   Reflect

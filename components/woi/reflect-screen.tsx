@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { DemoUserField } from "@/components/shared/demo-user-field";
 import {
   fetchComments,
   fetchGameDetail,
@@ -101,13 +100,6 @@ export function WoiReflectScreen({ gameId }: { gameId: string }) {
       title="Reflect"
       subtitle="Review turns by level and capture final comments for this game."
     >
-      <DemoUserField
-        onApplied={() => {
-          void loadGame();
-          void loadComments();
-        }}
-      />
-
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
         <div className="space-y-4 xl:col-span-2">
           <WoiSection
@@ -115,7 +107,7 @@ export function WoiReflectScreen({ gameId }: { gameId: string }) {
             actions={
               <div className="flex gap-2">
                 <Link
-                  href={`/woi/games/${gameId}/play`}
+                  href={`/woi/games/${gameId}`}
                   className="rounded-md bg-slate-900 px-3 py-2 text-xs font-medium text-white transition hover:bg-slate-700"
                 >
                   Back to play

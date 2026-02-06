@@ -1,6 +1,7 @@
 import "server-only";
 
 import type { PostgrestError } from "@supabase/supabase-js";
+import { z } from "zod";
 
 import { getDemoActorFromRequest } from "@/lib/demo-auth";
 import { jsonError } from "@/lib/http";
@@ -8,6 +9,7 @@ import { supabaseAdmin } from "@/lib/supabase/admin";
 
 type ActorSuccess = { actorId: string };
 type ActorFailure = { response: Response };
+const actorIdSchema = z.string().uuid();
 
 export type WoiGameRow = {
   id: string;
@@ -49,7 +51,18 @@ export function requireActorId(request: Request): ActorSuccess | ActorFailure {
     };
   }
 
-  return { actorId: actor.userId };
+  const parsedActorId = actorIdSchema.safeParse(actor.userId);
+  if (!parsedActorId.success) {
+    return {
+      response: jsonError("Invalid demo actor id. Provide a UUID in x-demo-user-id header.", {
+        status: 400,
+        code: "INVALID_ACTOR_ID",
+        details: parsedActorId.error.flatten(),
+      }),
+    };
+  }
+
+  return { actorId: parsedActorId.data };
 }
 
 export function jsonDbError(
@@ -120,12 +133,12 @@ export async function getGameById(gameId: string) {
 
 export async function canActorReadGame(game: WoiGameRow, actorId: string) {
   if (game.is_public || game.creator_id === actorId) {
-    return { canRead: true };
+    return { canRead: true as const };
   }
 
   const membership = await isTeamMember(game.team_id, actorId);
   if ("response" in membership) {
-    return membership;
+    return { response: membership.response };
   }
 
   return { canRead: membership.isMember };
