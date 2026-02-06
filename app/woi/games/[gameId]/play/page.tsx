@@ -1,4 +1,4 @@
-import { WoiPlayScreen } from "@/components/woi/play-screen";
+import { redirect } from "next/navigation";
 
 type WoiPlayPageProps = {
   params: Promise<{ gameId: string }>;
@@ -6,5 +6,5 @@ type WoiPlayPageProps = {
 
 export default async function WoiPlayPage({ params }: WoiPlayPageProps) {
   const { gameId } = await params;
-  return <WoiPlayScreen gameId={gameId} />;
+  redirect(`/woi/games/${gameId}`);
 }

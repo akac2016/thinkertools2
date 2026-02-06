@@ -181,6 +181,15 @@ create index if not exists idx_woi_games_team_updated
 create index if not exists idx_woi_games_public_updated
   on public.woi_games(is_public, updated_at desc);
 
+create table if not exists public.woi_game_ai_profiles (
+  game_id uuid primary key references public.woi_games(id) on delete cascade,
+  ai_player_count integer not null default 0 check (ai_player_count >= 0 and ai_player_count <= 11),
+  opponents jsonb not null default '[]'::jsonb,
+  created_by uuid references public.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 create table if not exists public.woi_turns (
   id uuid primary key default gen_random_uuid(),
   game_id uuid not null references public.woi_games(id) on delete cascade,

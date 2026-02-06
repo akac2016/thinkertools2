@@ -21,6 +21,13 @@ export function WoiShell({
 }) {
   const pathname = usePathname();
 
+  const isItemActive = (href: string) => {
+    if (href === "/woi") {
+      return pathname === "/woi";
+    }
+    return pathname === href || pathname.startsWith(`${href}/`);
+  };
+
   return (
     <main className="mx-auto min-h-screen w-full max-w-6xl px-4 py-6 sm:px-6 sm:py-8">
       <header className="mb-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
@@ -32,7 +39,7 @@ export function WoiShell({
         <nav aria-label="WOI navigation" className="mt-4">
           <ul className="grid grid-cols-1 gap-2 sm:grid-cols-3">
             {navItems.map((item) => {
-              const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+              const active = isItemActive(item.href);
 
               return (
                 <li key={item.href}>

@@ -1,4 +1,4 @@
-import { WoiReflectScreen } from "@/components/woi/reflect-screen";
+import { redirect } from "next/navigation";
 
 type WoiReflectPageProps = {
   params: Promise<{ gameId: string }>;
@@ -6,5 +6,5 @@ type WoiReflectPageProps = {
 
 export default async function WoiReflectPage({ params }: WoiReflectPageProps) {
   const { gameId } = await params;
-  return <WoiReflectScreen gameId={gameId} />;
+  redirect(`/woi/games/${gameId}?tab=reflect`);
 }

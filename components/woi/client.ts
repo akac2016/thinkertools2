@@ -70,6 +70,19 @@ export type WoiTeamSummary = {
   name: string;
 };
 
+export type WoiGeneratedOpponent = {
+  codename: string;
+  narrative: string;
+  intelligence: "novice" | "analytical" | "strategic" | "expert";
+  difficulty: "easy" | "medium" | "hard" | "adaptive";
+  imageUrl: string;
+};
+
+export type WoiSubjectQuestion = {
+  subject: string;
+  question: string;
+};
+
 export type WoiTemplateCatalogEntry = {
   id: string;
   name: string;
@@ -97,6 +110,47 @@ export type ContextComment = {
   body: string;
   createdAt: string;
   author: WoiUser | null;
+};
+
+export type WoiSpinnerTile = {
+  id: string;
+  label: string;
+  imageUrl: string;
+  orderIndex: number | null;
+  levelIndex: number | null;
+  objective: string | null;
+};
+
+export type WoiAiPlayer = {
+  userId: string;
+  displayName: string;
+  baseName: string;
+  isHuman: boolean;
+  isCurrent: boolean;
+  turnOffset: number | null;
+  persona: string | null;
+  narrative: string | null;
+  imageUrl: string | null;
+  intelligence: "novice" | "analytical" | "strategic" | "expert" | null;
+  difficulty: "easy" | "medium" | "hard" | "adaptive" | null;
+};
+
+export type WoiGameAiPack = {
+  topic: string;
+  rules: string[];
+  aiPlayers: WoiAiPlayer[];
+  turnForecast: {
+    turnsUntilHuman: number | null;
+  };
+  spinner: {
+    levels: WoiSpinnerTile[];
+    moves: WoiSpinnerTile[];
+    rules: WoiSpinnerTile[];
+  };
+  generatedAt: string;
+  imageSource: string;
+  rosterSource: string;
+  rosterModel: string;
 };
 
 function readValue(record: Record<string, unknown>, keys: string[]): unknown {
@@ -479,6 +533,134 @@ export async function createGame(input: {
   return normalizeGameSummary(gameRecord, 0);
 }
 
+export async function createQuickstartGame(input: {
+  prompt?: string;
+  teamId?: string;
+  isPublic?: boolean;
+  aiPlayerCount?: number;
+  opponents?: WoiGeneratedOpponent[];
+}) {
+  const payload = await apiFetch<unknown>("/api/woi/games/quickstart", {
+    method: "POST",
+    body: JSON.stringify({
+      prompt: input.prompt?.trim() || undefined,
+      teamId: input.teamId?.trim() || undefined,
+      isPublic: input.isPublic ?? false,
+      aiPlayerCount:
+        typeof input.aiPlayerCount === "number" && Number.isFinite(input.aiPlayerCount)
+          ? Math.max(0, Math.floor(input.aiPlayerCount))
+          : undefined,
+      opponents: (input.opponents ?? []).map((opponent) => ({
+        codename: opponent.codename,
+        narrative: opponent.narrative,
+        intelligence: opponent.intelligence,
+        difficulty: opponent.difficulty,
+        imageUrl: opponent.imageUrl,
+      })),
+    }),
+  });
+
+  const root = parseObject(payload) ?? {};
+  const gameRecord = parseObject(root.game) ?? root;
+  return normalizeGameSummary(gameRecord, 0);
+}
+
+function normalizeGeneratedOpponent(value: unknown, index: number): WoiGeneratedOpponent {
+  const record = parseObject(value) ?? {};
+  const intelligenceRaw = readStringValue(record, ["intelligence"], "analytical");
+  const difficultyRaw = readStringValue(record, ["difficulty"], "medium");
+  const intelligence = (
+    intelligenceRaw === "novice" ||
+    intelligenceRaw === "analytical" ||
+    intelligenceRaw === "strategic" ||
+    intelligenceRaw === "expert"
+      ? intelligenceRaw
+      : "analytical"
+  ) as WoiGeneratedOpponent["intelligence"];
+  const difficulty = (
+    difficultyRaw === "easy" ||
+    difficultyRaw === "medium" ||
+    difficultyRaw === "hard" ||
+    difficultyRaw === "adaptive"
+      ? difficultyRaw
+      : "medium"
+  ) as WoiGeneratedOpponent["difficulty"];
+
+  return {
+    codename: readStringValue(record, ["codename"], `Opponent ${index + 1}`),
+    narrative: readStringValue(
+      record,
+      ["narrative", "personality"],
+      "This opponent plays with a balanced style and keeps pressure steady while adapting to the board state.",
+    ),
+    intelligence,
+    difficulty,
+    imageUrl: readStringValue(record, ["imageUrl", "image_url"], ""),
+  };
+}
+
+export async function generateAiOpponents(input: {
+  count: number;
+  prompt?: string;
+  regenerateNonce?: string;
+}): Promise<WoiGeneratedOpponent[]> {
+  const payload = await apiFetch<unknown>("/api/woi/opponents", {
+    method: "POST",
+    body: JSON.stringify({
+      count: Math.max(0, Math.min(4, Math.floor(input.count))),
+      prompt: input.prompt?.trim() || undefined,
+      regenerateNonce: input.regenerateNonce?.trim() || undefined,
+    }),
+  });
+
+  const root = parseObject(payload) ?? {};
+  const opponents = (readArray(root, ["opponents"]) ?? []).map((entry, index) =>
+    normalizeGeneratedOpponent(entry, index),
+  );
+  return opponents;
+}
+
+export async function generateLearningSubjects(input: {
+  hint?: string;
+  count?: number;
+}): Promise<string[]> {
+  const payload = await apiFetch<unknown>("/api/woi/subjects", {
+    method: "POST",
+    body: JSON.stringify({
+      mode: "subjects",
+      hint: input.hint?.trim() || undefined,
+      count:
+        typeof input.count === "number" && Number.isFinite(input.count)
+          ? Math.max(3, Math.min(8, Math.floor(input.count)))
+          : undefined,
+    }),
+  });
+
+  const root = parseObject(payload) ?? {};
+  return (readArray(root, ["subjects"]) ?? [])
+    .map((entry) => parseString(entry))
+    .filter((entry): entry is string => Boolean(entry?.trim()))
+    .map((entry) => entry.trim());
+}
+
+export async function generateLearningQuestion(input: {
+  subject: string;
+}): Promise<WoiSubjectQuestion> {
+  const payload = await apiFetch<unknown>("/api/woi/subjects", {
+    method: "POST",
+    body: JSON.stringify({
+      mode: "question",
+      subject: input.subject.trim(),
+    }),
+  });
+
+  const root = parseObject(payload) ?? {};
+  return {
+    subject: readStringValue(root, ["subject"], input.subject.trim()),
+    question: readStringValue(root, ["question"], `What should we learn first about ${input.subject.trim()}?`),
+  };
+}
+
 export async function fetchGameDetail(gameId: string): Promise<WoiGameDetail> {
   const payload = await apiFetch<unknown>(`/api/woi/games/${encodeURIComponent(gameId)}`);
   return normalizeGameDetail(payload);
@@ -571,6 +753,90 @@ function normalizeComment(value: unknown, index: number): ContextComment {
   };
 }
 
+function normalizeSpinnerTile(value: unknown, index: number): WoiSpinnerTile {
+  const record = parseObject(value) ?? {};
+  return {
+    id: readStringValue(record, ["id"], `tile-${index + 1}`),
+    label: readStringValue(record, ["label", "name"], "Untitled"),
+    imageUrl: readStringValue(record, ["imageUrl", "image_url"], ""),
+    orderIndex: readNumberValue(record, ["order_index", "orderIndex"]),
+    levelIndex: readNumberValue(record, ["levelIndex", "level_index"]),
+    objective: readNullableStringValue(record, ["objective"]),
+  };
+}
+
+function normalizeAiPlayer(value: unknown, index: number): WoiAiPlayer {
+  const record = parseObject(value) ?? {};
+  const intelligenceRaw = readNullableStringValue(record, ["intelligence"]);
+  const difficultyRaw = readNullableStringValue(record, ["difficulty"]);
+  return {
+    userId: readStringValue(record, ["userId", "user_id"], `player-${index + 1}`),
+    displayName: readStringValue(record, ["displayName", "display_name"], `Player ${index + 1}`),
+    baseName: readStringValue(record, ["baseName", "base_name"], `Player ${index + 1}`),
+    isHuman: readBooleanValue(record, ["isHuman", "is_human"], false),
+    isCurrent: readBooleanValue(record, ["isCurrent", "is_current"], false),
+    turnOffset: readNumberValue(record, ["turnOffset", "turn_offset"]),
+    persona: readNullableStringValue(record, ["persona"]),
+    narrative: readNullableStringValue(record, ["narrative"]),
+    imageUrl: readNullableStringValue(record, ["imageUrl", "image_url"]),
+    intelligence:
+      intelligenceRaw === "novice"
+      || intelligenceRaw === "analytical"
+      || intelligenceRaw === "strategic"
+      || intelligenceRaw === "expert"
+        ? intelligenceRaw
+        : null,
+    difficulty:
+      difficultyRaw === "easy"
+      || difficultyRaw === "medium"
+      || difficultyRaw === "hard"
+      || difficultyRaw === "adaptive"
+        ? difficultyRaw
+        : null,
+  };
+}
+
+function normalizeGameAiPack(value: unknown): WoiGameAiPack {
+  const root = parseObject(value) ?? {};
+  const spinnerRecord = readObject(root, ["spinner"]) ?? {};
+  const turnForecastRecord = readObject(root, ["turnForecast", "turn_forecast"]) ?? {};
+
+  const levelTiles = (readArray(spinnerRecord, ["levels"]) ?? []).map((tile, index) =>
+    normalizeSpinnerTile(tile, index),
+  );
+  const moveTiles = (readArray(spinnerRecord, ["moves"]) ?? []).map((tile, index) =>
+    normalizeSpinnerTile(tile, index),
+  );
+  const ruleTiles = (readArray(spinnerRecord, ["rules"]) ?? []).map((tile, index) =>
+    normalizeSpinnerTile(tile, index),
+  );
+
+  const rules = (readArray(root, ["rules"]) ?? []).map((entry) =>
+    parseString(entry, "").trim(),
+  ).filter(Boolean);
+  const players = (readArray(root, ["aiPlayers", "players"]) ?? []).map((entry, index) =>
+    normalizeAiPlayer(entry, index),
+  );
+
+  return {
+    topic: readStringValue(root, ["topic"], ""),
+    rules,
+    aiPlayers: players,
+    turnForecast: {
+      turnsUntilHuman: readNumberValue(turnForecastRecord, ["turnsUntilHuman", "turns_until_human"]),
+    },
+    spinner: {
+      levels: levelTiles,
+      moves: moveTiles,
+      rules: ruleTiles,
+    },
+    generatedAt: readStringValue(root, ["generatedAt", "generated_at"], ""),
+    imageSource: readStringValue(root, ["imageSource", "image_source"], "fallback"),
+    rosterSource: readStringValue(root, ["rosterSource", "roster_source"], "mock"),
+    rosterModel: readStringValue(root, ["rosterModel", "roster_model"], "unknown"),
+  };
+}
+
 export async function fetchComments(contextId: string): Promise<ContextComment[]> {
   const params = new URLSearchParams({
     contextType: "woi_game",
@@ -580,6 +846,25 @@ export async function fetchComments(contextId: string): Promise<ContextComment[]
   const payload = await apiFetch<unknown>(`/api/comments?${params.toString()}`);
   const comments = coerceListPayload(payload, ["comments", "items", "data"]);
   return comments.map((entry, index) => normalizeComment(entry, index));
+}
+
+export async function fetchGameAiPack(
+  gameId: string,
+  regenerateNonce?: string,
+  aiPlayerCount?: number,
+): Promise<WoiGameAiPack> {
+  const payload = await apiFetch<unknown>(`/api/woi/games/${encodeURIComponent(gameId)}/ai-pack`, {
+    method: "POST",
+    body: JSON.stringify({
+      regenerateNonce: regenerateNonce?.trim() || undefined,
+      aiPlayerCount:
+        typeof aiPlayerCount === "number" && Number.isFinite(aiPlayerCount)
+          ? Math.max(0, Math.floor(aiPlayerCount))
+          : undefined,
+    }),
+  });
+
+  return normalizeGameAiPack(payload);
 }
 
 export async function postComment(contextId: string, body: string) {

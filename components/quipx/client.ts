@@ -2,7 +2,13 @@
 
 export const DEMO_USER_HEADER = "x-demo-user-id";
 const DEMO_USER_STORAGE_KEY = "quipx-demo-user-id";
-const FALLBACK_DEMO_USER_ID = "demo-user-1";
+const FALLBACK_DEMO_USER_ID = "11111111-1111-4111-8111-111111111111";
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isUuid(value: string): boolean {
+  return UUID_PATTERN.test(value);
+}
 
 export type ApiEnvelope<T> =
   | { ok: true; data: T }
@@ -20,8 +26,12 @@ export function getDemoUserId(): string {
   }
 
   const saved = window.localStorage.getItem(DEMO_USER_STORAGE_KEY)?.trim();
-  if (saved) {
+  if (saved && isUuid(saved)) {
     return saved;
+  }
+
+  if (saved && !isUuid(saved)) {
+    window.localStorage.setItem(DEMO_USER_STORAGE_KEY, FALLBACK_DEMO_USER_ID);
   }
 
   return FALLBACK_DEMO_USER_ID;
@@ -32,7 +42,8 @@ export function setDemoUserId(userId: string) {
     return;
   }
 
-  const next = userId.trim() || FALLBACK_DEMO_USER_ID;
+  const normalized = userId.trim();
+  const next = isUuid(normalized) ? normalized : FALLBACK_DEMO_USER_ID;
   window.localStorage.setItem(DEMO_USER_STORAGE_KEY, next);
 }
 

@@ -5,16 +5,39 @@ begin;
 
 set search_path = public;
 
+-- Reset demo data so reseeding replaces existing content deterministically.
+truncate table
+  public.ai_runs,
+  public.event_log,
+  public.comments,
+  public.woi_turns,
+  public.woi_game_ai_profiles,
+  public.woi_games,
+  public.woi_template_levels,
+  public.woi_template_moves,
+  public.woi_template_rules,
+  public.woi_templates,
+  public.quipx_reflections,
+  public.quipx_discuss_entries,
+  public.quipx_sessions,
+  public.quipx_improve_strategies,
+  public.quipx_reflect_responses,
+  public.quipx_reflect_items,
+  public.team_members,
+  public.teams,
+  public.users
+restart identity cascade;
+
 -- ----------
 -- Users
 -- ----------
 insert into public.users (id, name, email, color)
 values
-  ('11111111-1111-4111-8111-111111111111', 'Alice Facilitator', 'alice@demo.local', '#1f2937'),
-  ('22222222-2222-4222-8222-222222222222', 'Ben Researcher', 'ben@demo.local', '#0f766e'),
-  ('33333333-3333-4333-8333-333333333333', 'Carmen Analyst', 'carmen@demo.local', '#7c2d12'),
-  ('44444444-4444-4444-8444-444444444444', 'Dev Operator', 'dev@demo.local', '#312e81'),
-  ('55555555-5555-4555-8555-555555555555', 'Judge Viewer', 'judge@demo.local', '#4b5563')
+  ('11111111-1111-4111-8111-111111111111', 'Avery Agenda', 'avery@demo.local', '#1f2937'),
+  ('22222222-2222-4222-8222-222222222222', 'Rico Receipts', 'rico@demo.local', '#0f766e'),
+  ('33333333-3333-4333-8333-333333333333', 'Tess Tradeoff', 'tess@demo.local', '#7c2d12'),
+  ('44444444-4444-4444-8444-444444444444', 'Piper Patch', 'piper@demo.local', '#312e81'),
+  ('55555555-5555-4555-8555-555555555555', 'Jules Judge', 'jules@demo.local', '#4b5563')
 on conflict (id) do update
 set name = excluded.name,
     email = excluded.email,
@@ -25,8 +48,8 @@ set name = excluded.name,
 -- ----------
 insert into public.teams (id, name)
 values
-  ('10000000-0000-4000-8000-000000000001', 'Climate Lab'),
-  ('10000000-0000-4000-8000-000000000002', 'Product Discovery Squad')
+  ('10000000-0000-4000-8000-000000000001', 'Heatwave Response Lab'),
+  ('10000000-0000-4000-8000-000000000002', 'Launchpad Discovery Crew')
 on conflict (id) do update
 set name = excluded.name;
 
@@ -105,8 +128,8 @@ values (
   '60000000-0000-4000-8000-000000000001',
   '10000000-0000-4000-8000-000000000001',
   '11111111-1111-4111-8111-111111111111',
-  'How should we prioritize climate adaptation pilots this quarter?',
-  'Identify top 2 pilot candidates, agree decision criteria, and assign owners for next-step validation.',
+  'Which heat-fighting pilot should we fund before the city melts our slide deck?',
+  'Pick two high-impact adaptation pilots, define decision criteria early, and assign one owner per validation task.',
   now() + interval '1 day',
   60,
   'active'
@@ -122,9 +145,9 @@ set team_id = excluded.team_id,
 
 insert into public.quipx_discuss_entries (id, session_id, author_id, body_html, created_at)
 values
-  ('61000000-0000-4000-8000-000000000001', '60000000-0000-4000-8000-000000000001', '11111111-1111-4111-8111-111111111111', '<p>Let''s align on decision criteria first: impact, feasibility, and learning value.</p>', now() - interval '35 minutes'),
-  ('61000000-0000-4000-8000-000000000002', '60000000-0000-4000-8000-000000000001', '22222222-2222-4222-8222-222222222222', '<p>Heat-resilient transit shelters score high on impact and are deployable this quarter.</p>', now() - interval '30 minutes'),
-  ('61000000-0000-4000-8000-000000000003', '60000000-0000-4000-8000-000000000001', '33333333-3333-4333-8333-333333333333', '<p>Let''s include one data-heavy pilot to improve forecasting confidence for next cycle.</p>', now() - interval '28 minutes')
+  ('61000000-0000-4000-8000-000000000001', '60000000-0000-4000-8000-000000000001', '11111111-1111-4111-8111-111111111111', '<p>Ground rule: no vibe-only picks. We score impact, feasibility, and learning value before any champion speech.</p>', now() - interval '35 minutes'),
+  ('61000000-0000-4000-8000-000000000002', '60000000-0000-4000-8000-000000000001', '22222222-2222-4222-8222-222222222222', '<p>Transit shelter retrofits are boring in the best way: fast, measurable, and city-ready this quarter.</p>', now() - interval '30 minutes'),
+  ('61000000-0000-4000-8000-000000000003', '60000000-0000-4000-8000-000000000001', '33333333-3333-4333-8333-333333333333', '<p>One data-heavy pilot now prevents expensive guesswork later; confidence is a feature, not overhead.</p>', now() - interval '28 minutes')
 on conflict (id) do update
 set session_id = excluded.session_id,
     author_id = excluded.author_id,
@@ -171,9 +194,9 @@ set score = excluded.score,
 -- ----------
 insert into public.woi_templates (id, creator_id, name, objective, category, is_public)
 values
-  ('40000000-0000-4000-8000-000000000001', '11111111-1111-4111-8111-111111111111', 'Cause Map Inquiry', 'Build a causal map that explains a target outcome and highlights high-leverage intervention points.', 'structural', true),
-  ('40000000-0000-4000-8000-000000000002', '22222222-2222-4222-8222-222222222222', 'Decision Criteria Inquiry', 'Score options against explicit criteria to produce a transparent recommendation.', 'functional', true),
-  ('40000000-0000-4000-8000-000000000003', '11111111-1111-4111-8111-111111111111', 'Roadmap Tradeoff Inquiry', 'Sequence decisions over time while making tradeoffs explicit for each milestone.', 'process', false)
+  ('40000000-0000-4000-8000-000000000001', '11111111-1111-4111-8111-111111111111', 'Domino Map Inquiry', 'Map the chain of causes behind a target outcome and spotlight the few levers that move everything.', 'structural', true),
+  ('40000000-0000-4000-8000-000000000002', '22222222-2222-4222-8222-222222222222', 'Criteria Cage Match', 'Force competing options through one shared scorecard so recommendations survive daylight.', 'functional', true),
+  ('40000000-0000-4000-8000-000000000003', '11111111-1111-4111-8111-111111111111', 'Roadmap Tightrope Inquiry', 'Stage decisions over time and make every speed-vs-quality tradeoff explicit before execution.', 'process', false)
 on conflict (id) do update
 set creator_id = excluded.creator_id,
     name = excluded.name,
@@ -248,8 +271,8 @@ values
     '40000000-0000-4000-8000-000000000001',
     '10000000-0000-4000-8000-000000000001',
     '11111111-1111-4111-8111-111111111111',
-    'Which interventions can reduce urban heat mortality fastest?',
-    'Team will map drivers of heat risk and identify highest-leverage interventions for near-term deployment.',
+    'How do we keep people cool without burning the budget (or patience)?',
+    'Map heat-risk drivers, choose the highest-leverage interventions, and commit to near-term execution owners.',
     true,
     'reflect',
     '22222222-2222-4222-8222-222222222222'
@@ -259,8 +282,8 @@ values
     '40000000-0000-4000-8000-000000000003',
     '10000000-0000-4000-8000-000000000002',
     '11111111-1111-4111-8111-111111111111',
-    'How should we phase the Q3 product experiments?',
-    'Create a milestone-based plan with explicit tradeoffs on speed, quality, and confidence.',
+    'Which experiments deserve runway before Q3 turns into Q-why?',
+    'Build a milestone plan that makes speed, quality, and confidence tradeoffs painfully explicit.',
     false,
     'in_play',
     '44444444-4444-4444-8444-444444444444'
@@ -334,8 +357,8 @@ set game_id = excluded.game_id,
 -- ----------
 insert into public.comments (id, context_type, context_id, author_id, body, created_at)
 values
-  ('62000000-0000-4000-8000-000000000001', 'quipx_session', '60000000-0000-4000-8000-000000000001', '11111111-1111-4111-8111-111111111111', 'Next session: start with a two-minute criteria recap and enforce 90-second turn limits.', now() - interval '20 minutes'),
-  ('62000000-0000-4000-8000-000000000002', 'woi_game', '50000000-0000-4000-8000-000000000001', '22222222-2222-4222-8222-222222222222', 'Strong causal structure. We should quantify uncertainty on two links before publishing final recommendation.', now() - interval '18 minutes')
+  ('62000000-0000-4000-8000-000000000001', 'quipx_session', '60000000-0000-4000-8000-000000000001', '11111111-1111-4111-8111-111111111111', 'Next session starts with a two-minute scorecard recap and strict 90-second turns. No keynote monologues.', now() - interval '20 minutes'),
+  ('62000000-0000-4000-8000-000000000002', 'woi_game', '50000000-0000-4000-8000-000000000001', '22222222-2222-4222-8222-222222222222', 'Great map. Quantify uncertainty on two links before we declare victory in front of judges.', now() - interval '18 minutes')
 on conflict (id) do update
 set context_type = excluded.context_type,
     context_id = excluded.context_id,
@@ -355,7 +378,7 @@ values
     'session_created',
     'quipx_session',
     '60000000-0000-4000-8000-000000000001',
-    '{"source":"seed","team":"Climate Lab"}'::jsonb,
+    '{"source":"seed","team":"Heatwave Response Lab"}'::jsonb,
     now() - interval '1 hour'
   ),
   (
@@ -391,8 +414,8 @@ values
     820,
     410,
     1860,
-    'Generate a process game template for climate adaptation planning.',
-    'Returned objective, 3 rules, 3 moves, 3 levels.',
+    'Generate a process template for a city heat-response planning game.',
+    'Returned objective plus 3 rules, 3 moves, and 3 levels with clear facilitation flow.',
     '',
     '11111111-1111-4111-8111-111111111111',
     now() - interval '40 minutes'
@@ -406,8 +429,8 @@ values
     460,
     220,
     980,
-    'Rewrite turn text to be concise and evidence-backed.',
-    'Produced revised turn with citation placeholders.',
+    'Rewrite this turn to be tighter, clearer, and evidence-first.',
+    'Returned a concise revision with evidence hooks and citation placeholders.',
     '',
     '22222222-2222-4222-8222-222222222222',
     now() - interval '35 minutes'

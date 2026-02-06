@@ -11,7 +11,6 @@ type TeamMemberRow = {
 type TeamRow = {
   id: string;
   name: string;
-  created_at: string;
 };
 
 export async function GET(request: Request) {
@@ -23,8 +22,7 @@ export async function GET(request: Request) {
   const { data: membershipData, error: membershipError } = await supabaseAdmin
     .from("team_members")
     .select("team_id")
-    .eq("user_id", actor.actorId)
-    .order("created_at", { ascending: true });
+    .eq("user_id", actor.actorId);
 
   if (membershipError) {
     return jsonDbError("Failed to load team memberships", membershipError);
@@ -37,7 +35,7 @@ export async function GET(request: Request) {
 
   const { data: teamsData, error: teamsError } = await supabaseAdmin
     .from("teams")
-    .select("id,name,created_at")
+    .select("id,name")
     .in("id", teamIds)
     .order("name", { ascending: true });
 
@@ -50,7 +48,6 @@ export async function GET(request: Request) {
       teams: ((teamsData ?? []) as TeamRow[]).map((team) => ({
         id: team.id,
         name: team.name,
-        created_at: team.created_at,
       })),
     },
     { status: 200 },
