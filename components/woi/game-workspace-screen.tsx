@@ -10,6 +10,7 @@ import {
   fetchGameAiPack,
   fetchGameDetail,
   postComment,
+  startLobbyGame,
   submitTurn,
   type ContextComment,
   type WoiGeneratedOpponent,
@@ -400,6 +401,8 @@ export function WoiGameWorkspaceScreen({ gameId }: { gameId: string }) {
   const [diceOutcomeMessage, setDiceOutcomeMessage] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [startingGame, setStartingGame] = useState(false);
+  const [startGameError, setStartGameError] = useState<string | null>(null);
 
   const [levelFilter, setLevelFilter] = useState<string>("all");
 
@@ -463,6 +466,22 @@ export function WoiGameWorkspaceScreen({ gameId }: { gameId: string }) {
                   ? record.difficulty
                   : "medium";
               const imageUrl = typeof record.imageUrl === "string" ? record.imageUrl : "";
+              const appearanceRecord =
+                typeof record.appearance === "object" && record.appearance !== null
+                  ? (record.appearance as Record<string, unknown>)
+                  : null;
+              const skinToneBucket =
+                appearanceRecord && typeof appearanceRecord.skinToneBucket === "string"
+                  ? appearanceRecord.skinToneBucket.trim() || null
+                  : null;
+              const featureProfile =
+                appearanceRecord && typeof appearanceRecord.featureProfile === "string"
+                  ? appearanceRecord.featureProfile.trim() || null
+                  : null;
+              const hairProfile =
+                appearanceRecord && typeof appearanceRecord.hairProfile === "string"
+                  ? appearanceRecord.hairProfile.trim() || null
+                  : null;
               if (!codename || !narrative) {
                 return null;
               }
@@ -472,6 +491,14 @@ export function WoiGameWorkspaceScreen({ gameId }: { gameId: string }) {
                 intelligence,
                 difficulty,
                 imageUrl,
+                appearance:
+                  skinToneBucket || featureProfile || hairProfile
+                    ? {
+                        skinToneBucket,
+                        featureProfile,
+                        hairProfile,
+                      }
+                    : null,
               } satisfies WoiGeneratedOpponent;
             })
             .filter((entry): entry is WoiGeneratedOpponent => Boolean(entry))
@@ -571,12 +598,12 @@ export function WoiGameWorkspaceScreen({ gameId }: { gameId: string }) {
   }, [aiTurnPaused, loadComments, loadGame]);
 
   useEffect(() => {
-    if (activeTab !== "play" || aiPack || aiPackLoading) {
+    if (!demoUserId || activeTab !== "play" || aiPack || aiPackLoading) {
       return;
     }
 
     void loadAiPack(false);
-  }, [activeTab, aiPack, aiPackLoading, loadAiPack]);
+  }, [activeTab, aiPack, aiPackLoading, demoUserId, loadAiPack]);
 
   useEffect(() => {
     setAiPack(null);
@@ -722,6 +749,7 @@ export function WoiGameWorkspaceScreen({ gameId }: { gameId: string }) {
 
   const isCurrentPlayer =
     Boolean(game?.currentPlayer?.id) && game?.currentPlayer?.id === demoUserId;
+  const isCreator = Boolean(game?.creator?.id) && game?.creator?.id === demoUserId;
 
   const humanTurnMessage = useMemo(() => {
     const turnsUntilHuman = aiPack?.turnForecast.turnsUntilHuman ?? null;
@@ -748,6 +776,12 @@ export function WoiGameWorkspaceScreen({ gameId }: { gameId: string }) {
       setAiTurnPaused(false);
     }
   }, [isAiTurnNow]);
+
+  useEffect(() => {
+    if (game?.status !== "lobby") {
+      setStartGameError(null);
+    }
+  }, [game?.status]);
 
   const persistedOpponentByUserId = useMemo(() => {
     const map = new Map<string, WoiGeneratedOpponent>();
@@ -865,6 +899,11 @@ export function WoiGameWorkspaceScreen({ gameId }: { gameId: string }) {
   ]);
 
   const onSubmitTurn = async () => {
+    if (game?.status === "lobby") {
+      setSubmitError("Game has not started yet.");
+      return;
+    }
+
     if (!content.trim()) {
       setSubmitError("Turn text is required.");
       return;
@@ -906,6 +945,25 @@ export function WoiGameWorkspaceScreen({ gameId }: { gameId: string }) {
       setSubmitError(turnError instanceof Error ? turnError.message : "Failed to submit turn");
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const onStartGame = async () => {
+    if (!game || game.status !== "lobby" || startingGame) {
+      return;
+    }
+
+    setStartingGame(true);
+    setStartGameError(null);
+
+    try {
+      await startLobbyGame(game.id);
+      setSubmitError(null);
+      await loadGame();
+    } catch (startError) {
+      setStartGameError(startError instanceof Error ? startError.message : "Failed to start game");
+    } finally {
+      setStartingGame(false);
     }
   };
 
@@ -988,6 +1046,38 @@ export function WoiGameWorkspaceScreen({ gameId }: { gameId: string }) {
 
         {activeTab === "play" ? (
           <div className="space-y-4">
+            {game?.status === "lobby" ? (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
+                <p className="text-sm font-semibold text-amber-900">Lobby mode</p>
+                <p className="mt-1 text-xs text-amber-900/80">
+                  Turns are locked until the creator manually starts this game.
+                </p>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  {isCreator ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void onStartGame();
+                      }}
+                      disabled={startingGame}
+                      className="rounded-md bg-amber-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:bg-amber-500"
+                    >
+                      {startingGame ? "Starting..." : "Start game"}
+                    </button>
+                  ) : (
+                    <span className="text-xs text-amber-900/80">
+                      Waiting for the creator to start the game.
+                    </span>
+                  )}
+                </div>
+                {startGameError ? (
+                  <div className="mt-2">
+                    <InlineMessage kind="error">{startGameError}</InlineMessage>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
             {game && !isCurrentPlayer ? (
               <InlineMessage kind="info">
                 You are not the current player ({game.currentPlayer?.name ?? "unknown"}).
@@ -1239,9 +1329,9 @@ export function WoiGameWorkspaceScreen({ gameId }: { gameId: string }) {
                 void onSubmitTurn();
               }}
               className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
-              disabled={submitting}
+              disabled={submitting || game?.status === "lobby"}
             >
-              {submitting ? "Submitting..." : "Submit turn"}
+              {submitting ? "Submitting..." : (game?.status === "lobby" ? "Game not started" : "Submit turn")}
             </button>
           </div>
         ) : null}

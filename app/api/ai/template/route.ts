@@ -1,7 +1,7 @@
 import "server-only";
 
 import { runStructuredAi } from "@/lib/ai/client";
-import { getDemoActorFromRequest } from "@/lib/demo-auth";
+import { getOptionalActorIdFromRequest } from "@/lib/auth/actor";
 import { jsonError, jsonSuccess } from "@/lib/http";
 import {
   buildTemplateMock,
@@ -31,7 +31,7 @@ export async function POST(request: Request) {
     });
   }
 
-  const actor = getDemoActorFromRequest(request);
+  const actorId = await getOptionalActorIdFromRequest(request);
   const input = parsedInput.data;
 
   const result = await runStructuredAi({
@@ -46,7 +46,7 @@ export async function POST(request: Request) {
       JSON.stringify(input),
     ].join("\n"),
     mockResponse: buildTemplateMock(input),
-    createdBy: actor.userId,
+    createdBy: actorId,
   });
 
   return jsonSuccess(result.output, {

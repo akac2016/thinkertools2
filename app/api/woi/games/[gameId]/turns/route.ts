@@ -5,13 +5,14 @@ import { z } from "zod";
 import { jsonError, jsonSuccess } from "@/lib/http";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import {
-  canActorReadGame,
+  canAccessGame,
   getGameById,
   getTeamMembersOrdered,
   getUsersByIds,
   isTeamMember,
   jsonDbError,
   requireActorId,
+  resolveWoiGameAccessContext,
   uniqueIds,
   type UserRow,
 } from "@/lib/woi";
@@ -123,10 +124,7 @@ async function ensureTemplateRuleBelongsToTemplate(ruleId: string, templateId: s
 }
 
 export async function GET(request: Request, context: RouteContext) {
-  const actor = requireActorId(request);
-  if ("response" in actor) {
-    return actor.response;
-  }
+  const accessContext = await resolveWoiGameAccessContext(request);
 
   const params = paramsSchema.safeParse(await context.params);
   if (!params.success) {
@@ -159,7 +157,7 @@ export async function GET(request: Request, context: RouteContext) {
     });
   }
 
-  const visibility = await canActorReadGame(gameResult.game, actor.actorId);
+  const visibility = await canAccessGame(gameResult.game, accessContext);
   if ("response" in visibility) {
     return visibility.response;
   }
@@ -242,7 +240,7 @@ export async function GET(request: Request, context: RouteContext) {
 }
 
 export async function POST(request: Request, context: RouteContext) {
-  const actor = requireActorId(request);
+  const actor = await requireActorId(request);
   if ("response" in actor) {
     return actor.response;
   }
@@ -290,6 +288,13 @@ export async function POST(request: Request, context: RouteContext) {
     return jsonError("Cannot submit turns to a finished game", {
       status: 409,
       code: "GAME_FINISHED",
+    });
+  }
+
+  if (gameResult.game.status === "lobby") {
+    return jsonError("Game has not started yet", {
+      status: 409,
+      code: "GAME_NOT_STARTED",
     });
   }
 

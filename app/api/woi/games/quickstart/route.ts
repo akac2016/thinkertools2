@@ -6,6 +6,7 @@ import { runStructuredAi } from "@/lib/ai/client";
 import { jsonError, jsonSuccess } from "@/lib/http";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import {
+  WOI_GAME_SELECT_COLUMNS,
   getTeamMembersOrdered,
   isTeamMember,
   jsonDbError,
@@ -217,7 +218,7 @@ async function resolveTeamId(actorId: string, requestedTeamId?: string) {
 }
 
 export async function POST(request: Request) {
-  const actor = requireActorId(request);
+  const actor = await requireActorId(request);
   if ("response" in actor) {
     return actor.response;
   }
@@ -344,9 +345,7 @@ export async function POST(request: Request) {
       status: "in_play",
       current_player_id: initialCurrentPlayerId,
     })
-    .select(
-      "id,template_id,team_id,creator_id,question,description,is_public,status,current_player_id,created_at,updated_at",
-    )
+    .select(WOI_GAME_SELECT_COLUMNS)
     .single();
 
   if (createGameError) {

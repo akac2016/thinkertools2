@@ -5,6 +5,7 @@ import { z } from "zod";
 import { jsonError, jsonSuccess } from "@/lib/http";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import {
+  WOI_GAME_SELECT_COLUMNS,
   getTeamMembersOrdered,
   getUsersByIds,
   isTeamMember,
@@ -74,7 +75,7 @@ function mapUserById(users: UserRow[]): Map<string, UserRow> {
 }
 
 export async function GET(request: Request) {
-  const actor = requireActorId(request);
+  const actor = await requireActorId(request);
   if ("response" in actor) {
     return actor.response;
   }
@@ -98,9 +99,7 @@ export async function GET(request: Request) {
 
   const { data: gamesData, error: gamesError } = await supabaseAdmin
     .from("woi_games")
-    .select(
-      "id,template_id,team_id,creator_id,question,description,is_public,status,current_player_id,created_at,updated_at",
-    )
+    .select(WOI_GAME_SELECT_COLUMNS)
     .eq("team_id", parsedQuery.data.teamId)
     .order("updated_at", { ascending: false });
 
@@ -154,7 +153,7 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const actor = requireActorId(request);
+  const actor = await requireActorId(request);
   if ("response" in actor) {
     return actor.response;
   }
@@ -233,9 +232,7 @@ export async function POST(request: Request) {
       status: "in_play",
       current_player_id: initialCurrentPlayerId,
     })
-    .select(
-      "id,template_id,team_id,creator_id,question,description,is_public,status,current_player_id,created_at,updated_at",
-    )
+    .select(WOI_GAME_SELECT_COLUMNS)
     .single();
 
   if (createError) {

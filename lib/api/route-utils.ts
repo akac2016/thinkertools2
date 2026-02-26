@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { getDemoActorFromRequest } from "@/lib/demo-auth";
+import { requireActorIdFromRequest } from "@/lib/auth/actor";
 import { jsonError } from "@/lib/http";
 
 type ValidationTarget = "body" | "query" | "params" | "header";
@@ -107,23 +107,13 @@ export function parseQuery<T>(
   return parseWithSchema(queryObject, schema, "query");
 }
 
-export function requireDemoActorId(request: Request) {
-  const actor = getDemoActorFromRequest(request);
-
-  if (!actor.userId) {
-    return {
-      ok: false as const,
-      response: jsonError("A demo actor is required", {
-        status: 401,
-        code: "DEMO_ACTOR_REQUIRED",
-        details: {
-          header: "x-demo-user-id",
-        },
-      }),
-    };
+export async function requireDemoActorId(request: Request) {
+  const actor = await requireActorIdFromRequest(request);
+  if (!actor.ok) {
+    return actor;
   }
 
-  const parsedUserId = uuidSchema.safeParse(actor.userId);
+  const parsedUserId = uuidSchema.safeParse(actor.actorId);
   if (!parsedUserId.success) {
     return {
       ok: false as const,
@@ -134,7 +124,7 @@ export function requireDemoActorId(request: Request) {
   return {
     ok: true as const,
     actorId: parsedUserId.data,
-    actorSource: actor.source,
+    actorSource: actor.actorSource,
   };
 }
 

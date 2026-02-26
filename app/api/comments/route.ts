@@ -87,7 +87,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const actor = requireDemoActorId(request);
+    const actor = await requireDemoActorId(request);
     if (!actor.ok) {
       return actor.response;
     }

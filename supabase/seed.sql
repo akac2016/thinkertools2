@@ -31,15 +31,16 @@ restart identity cascade;
 -- ----------
 -- Users
 -- ----------
-insert into public.users (id, name, email, color)
+insert into public.users (id, username, name, email, color)
 values
-  ('11111111-1111-4111-8111-111111111111', 'Avery Agenda', 'avery@demo.local', '#1f2937'),
-  ('22222222-2222-4222-8222-222222222222', 'Rico Receipts', 'rico@demo.local', '#0f766e'),
-  ('33333333-3333-4333-8333-333333333333', 'Tess Tradeoff', 'tess@demo.local', '#7c2d12'),
-  ('44444444-4444-4444-8444-444444444444', 'Piper Patch', 'piper@demo.local', '#312e81'),
-  ('55555555-5555-4555-8555-555555555555', 'Jules Judge', 'jules@demo.local', '#4b5563')
+  ('11111111-1111-4111-8111-111111111111', 'avery.agenda', 'Avery Agenda', 'avery@demo.local', '#1f2937'),
+  ('22222222-2222-4222-8222-222222222222', 'rico.receipts', 'Rico Receipts', 'rico@demo.local', '#0f766e'),
+  ('33333333-3333-4333-8333-333333333333', 'tess.tradeoff', 'Tess Tradeoff', 'tess@demo.local', '#7c2d12'),
+  ('44444444-4444-4444-8444-444444444444', 'piper.patch', 'Piper Patch', 'piper@demo.local', '#312e81'),
+  ('55555555-5555-4555-8555-555555555555', 'jules.judge', 'Jules Judge', 'jules@demo.local', '#4b5563')
 on conflict (id) do update
-set name = excluded.name,
+set username = excluded.username,
+    name = excluded.name,
     email = excluded.email,
     color = excluded.color;
 

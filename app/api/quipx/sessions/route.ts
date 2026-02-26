@@ -26,7 +26,7 @@ type SessionRow = {
 };
 
 const listSessionsQuerySchema = z.object({
-  teamId: z.string().uuid(),
+  teamId: z.string().uuid().optional(),
   limit: z.coerce.number().int().min(1).max(100).optional(),
 });
 
@@ -96,8 +96,11 @@ export async function GET(request: Request) {
       .select(
         "id, team_id, creator_id, subject, objectives, starts_at, duration_min, status, created_at",
       )
-      .eq("team_id", teamId)
       .order("created_at", { ascending: false });
+
+    if (teamId) {
+      query = query.eq("team_id", teamId);
+    }
 
     if (limit) {
       query = query.limit(limit);
@@ -124,7 +127,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const actor = requireDemoActorId(request);
+    const actor = await requireDemoActorId(request);
     if (!actor.ok) {
       return actor.response;
     }

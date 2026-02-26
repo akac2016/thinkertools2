@@ -44,6 +44,14 @@ const requestSchema = z
       (value) => (typeof value === "string" ? value.trim() : undefined),
       z.string().min(1).max(120).optional(),
     ),
+    usedAppearance: z
+      .object({
+        skinToneBuckets: z.array(z.string().trim().min(1).max(60)).max(12).optional(),
+        featureProfiles: z.array(z.string().trim().min(1).max(60)).max(12).optional(),
+        hairProfiles: z.array(z.string().trim().min(1).max(60)).max(12).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -81,6 +89,10 @@ const opponentsSchema = z
   .strict();
 
 type OpponentSpec = z.infer<typeof opponentsSchema>["opponents"][number];
+type AppearanceAxisOption = {
+  id: string;
+  prompt: string;
+};
 
 const FALLBACK_OPPONENTS: OpponentSpec[] = [
   {
@@ -111,6 +123,39 @@ const FALLBACK_OPPONENTS: OpponentSpec[] = [
     intelligence: "novice",
     difficulty: "easy",
   },
+];
+
+const SKIN_TONE_BUCKET_OPTIONS: AppearanceAxisOption[] = [
+  { id: "very-light", prompt: "very light skin tone with cool or neutral undertones" },
+  { id: "light", prompt: "light skin tone with warm or peach undertones" },
+  { id: "light-medium", prompt: "light-medium skin tone with golden undertones" },
+  { id: "medium", prompt: "medium skin tone with balanced undertones" },
+  { id: "tan-olive", prompt: "tan to olive skin tone with warm undertones" },
+  { id: "medium-deep", prompt: "medium-deep skin tone with rich warm undertones" },
+  { id: "deep", prompt: "deep brown skin tone with warm undertones" },
+  { id: "very-deep", prompt: "very deep skin tone with cool or warm undertones" },
+];
+
+const FEATURE_PROFILE_OPTIONS: AppearanceAxisOption[] = [
+  { id: "monolid-straight-brow", prompt: "monolid eye shape with straight brows and balanced facial proportions" },
+  { id: "almond-soft-brow", prompt: "almond-shaped eyes, soft brows, and subtle cheek definition" },
+  { id: "deep-set-defined-brow", prompt: "deep-set eyes, defined brows, and angular facial structure" },
+  { id: "round-eyes-soft-jaw", prompt: "round eyes, fuller cheeks, and a soft jawline" },
+  { id: "high-cheekbones-angular-jaw", prompt: "high cheekbones with a defined angular jawline" },
+  { id: "broad-bridge-balanced-jaw", prompt: "broader nose bridge, balanced lips, and medium jaw definition" },
+  { id: "narrow-bridge-soft-chin", prompt: "narrow nose bridge, smooth cheeks, and a soft chin profile" },
+  { id: "wide-smile-strong-cheeks", prompt: "wider smile line, strong cheek contour, and rounded chin" },
+];
+
+const HAIR_PROFILE_OPTIONS: AppearanceAxisOption[] = [
+  { id: "black-coily-cropped", prompt: "black tightly coiled cropped hair" },
+  { id: "dark-brown-wavy", prompt: "dark brown wavy medium-length hair" },
+  { id: "black-straight-long", prompt: "straight black long hair" },
+  { id: "auburn-curly", prompt: "auburn curly shoulder-length hair" },
+  { id: "blond-textured-short", prompt: "blond short textured hair" },
+  { id: "silver-gray-slick", prompt: "silver-gray slicked-back hair" },
+  { id: "shaved-head", prompt: "shaved head with no visible hair length" },
+  { id: "bald", prompt: "bald head with clean scalp and no visible hair" },
 ];
 
 function buildMockOpponents(count: number): z.infer<typeof opponentsSchema> {
@@ -148,6 +193,156 @@ function hashString(input: string) {
     hash = (hash * 31 + input.charCodeAt(index)) >>> 0;
   }
   return hash;
+}
+
+function createSeededRandom(seed: number) {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) | 0;
+    let mixed = Math.imul(state ^ (state >>> 15), 1 | state);
+    mixed ^= mixed + Math.imul(mixed ^ (mixed >>> 7), 61 | mixed);
+    return ((mixed ^ (mixed >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function shuffleOptions(
+  options: AppearanceAxisOption[],
+  random: () => number,
+): AppearanceAxisOption[] {
+  const output = [...options];
+  for (let index = output.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(random() * (index + 1));
+    const current = output[index];
+    output[index] = output[swapIndex] as AppearanceAxisOption;
+    output[swapIndex] = current as AppearanceAxisOption;
+  }
+  return output;
+}
+
+function normalizeUsedIds(
+  values: string[] | undefined,
+  options: AppearanceAxisOption[],
+): string[] {
+  const allowedIds = new Set(options.map((option) => option.id));
+  const unique = new Set<string>();
+  for (const value of values ?? []) {
+    const normalized = value.trim();
+    if (!normalized || !allowedIds.has(normalized)) {
+      continue;
+    }
+    unique.add(normalized);
+  }
+  return Array.from(unique);
+}
+
+function pickWeightedOption(
+  options: AppearanceAxisOption[],
+  usedIds: Set<string>,
+  random: () => number,
+  unusedBoost = 1.5,
+): AppearanceAxisOption {
+  const weighted = options.map((option) => ({
+    option,
+    weight: usedIds.has(option.id) ? 1 : unusedBoost,
+  }));
+  const totalWeight = weighted.reduce((total, item) => total + item.weight, 0);
+  if (!Number.isFinite(totalWeight) || totalWeight <= 0) {
+    return options[0] as AppearanceAxisOption;
+  }
+
+  let threshold = random() * totalWeight;
+  for (const item of weighted) {
+    threshold -= item.weight;
+    if (threshold <= 0) {
+      return item.option;
+    }
+  }
+
+  return weighted[weighted.length - 1]?.option ?? (options[0] as AppearanceAxisOption);
+}
+
+function buildAxisPlan(input: {
+  options: AppearanceAxisOption[];
+  count: number;
+  usedIds: string[];
+  seed: string;
+}): AppearanceAxisOption[] {
+  const random = createSeededRandom(hashString(input.seed));
+  if (input.count <= 0) {
+    return [];
+  }
+
+  if (input.usedIds.length === 0 && input.count <= input.options.length) {
+    return shuffleOptions(input.options, random).slice(0, input.count);
+  }
+
+  const seenIds = new Set(input.usedIds);
+  const plan: AppearanceAxisOption[] = [];
+  for (let index = 0; index < input.count; index += 1) {
+    const picked = pickWeightedOption(input.options, seenIds, random, 1.5);
+    plan.push(picked);
+    seenIds.add(picked.id);
+  }
+
+  return plan;
+}
+
+type AppearancePlanEntry = {
+  skinTone: AppearanceAxisOption;
+  feature: AppearanceAxisOption;
+  hair: AppearanceAxisOption;
+};
+
+function buildAppearancePlan(input: {
+  count: number;
+  topic: string;
+  nonce: string;
+  usedAppearance?: {
+    skinToneBuckets?: string[];
+    featureProfiles?: string[];
+    hairProfiles?: string[];
+  };
+}): AppearancePlanEntry[] {
+  const count = Math.max(0, Math.floor(input.count));
+  if (count === 0) {
+    return [];
+  }
+
+  const baseSeed = `${input.topic}:${input.nonce}:${count}`;
+  const skinPlan = buildAxisPlan({
+    options: SKIN_TONE_BUCKET_OPTIONS,
+    count,
+    usedIds: normalizeUsedIds(
+      input.usedAppearance?.skinToneBuckets,
+      SKIN_TONE_BUCKET_OPTIONS,
+    ),
+    seed: `${baseSeed}:skin`,
+  });
+  const featurePlan = buildAxisPlan({
+    options: FEATURE_PROFILE_OPTIONS,
+    count,
+    usedIds: normalizeUsedIds(
+      input.usedAppearance?.featureProfiles,
+      FEATURE_PROFILE_OPTIONS,
+    ),
+    seed: `${baseSeed}:feature`,
+  });
+  const hairPlan = buildAxisPlan({
+    options: HAIR_PROFILE_OPTIONS,
+    count,
+    usedIds: normalizeUsedIds(input.usedAppearance?.hairProfiles, HAIR_PROFILE_OPTIONS),
+    seed: `${baseSeed}:hair`,
+  });
+
+  const defaultSkin = SKIN_TONE_BUCKET_OPTIONS[0] as AppearanceAxisOption;
+  const defaultFeature = FEATURE_PROFILE_OPTIONS[0] as AppearanceAxisOption;
+  const defaultHair = HAIR_PROFILE_OPTIONS[0] as AppearanceAxisOption;
+
+  return Array.from({ length: count }, (_, index) => ({
+    skinTone: skinPlan[index] ?? defaultSkin,
+    feature: featurePlan[index] ?? defaultFeature,
+    hair: hairPlan[index] ?? defaultHair,
+  }));
 }
 
 function fallbackPortraitDataUrl(codename: string, difficulty: string) {
@@ -213,6 +408,9 @@ async function generateOpponentPortrait(input: {
   difficulty: OpponentSpec["difficulty"];
   topic: string;
   nonce: string;
+  skinToneDirection: string;
+  featureDirection: string;
+  hairDirection: string;
 }) {
   const client = getOpenAIClient();
   if (!client) {
@@ -228,7 +426,6 @@ async function generateOpponentPortrait(input: {
     "engraved rapier",
     "tactical map scroll",
     "lantern compass",
-    "mechanical gauntlet",
     "arcane tome",
     "signal whistle",
   ];
@@ -260,8 +457,7 @@ async function generateOpponentPortrait(input: {
   const silhouette =
     silhouetteOptions[Math.floor(designSeed / 13) % silhouetteOptions.length] ??
     "structured costume";
-
-  const prompt = [
+  const basePromptParts = [
     "Animated-style full-body character portrait for a social deduction board game.",
     "Visual inspiration: modern tabletop art style similar to Codenames and Avalon (style only, no logos).",
     "2D boardgame character card illustration with bold, expressive design.",
@@ -270,10 +466,16 @@ async function generateOpponentPortrait(input: {
     "Simple atmosphere background, no text, no logos.",
     "Not photorealistic, not anime, not 3D render.",
     "Allow a wide emotional range: playful, cunning, mysterious, intense, or dramatic.",
+    "Prefer a gender-neutral or androgynous presentation unless explicit gender is provided.",
     "Character must be fully visible in frame from head to toe, not cropped.",
+    "Keep at least 10% top padding above the head and 5% side padding around the body.",
+    "Do not let the head, hair, hands, or feet touch the image boundary.",
+    "Use a slightly zoomed-out camera so the full silhouette fits comfortably.",
     "Include exactly one clear prop associated with the character.",
     "Prop must be visible and fully in frame.",
     "Ensure this character is visually distinct with unique silhouette, costume, and pose.",
+    "Across the full opponent roster, vary ethnicity-coded visual traits and skin tones.",
+    "Avoid stereotypes or caricatures.",
     `Use this silhouette direction: ${silhouette}.`,
     `Use this pose direction: ${pose}.`,
     `Use this prop: ${prop}.`,
@@ -285,53 +487,94 @@ async function generateOpponentPortrait(input: {
     `Character narrative: ${clip(input.narrative, 280)}.`,
     `Game topic: ${clip(input.topic, 160)}.`,
     `Variation seed: ${input.nonce}.`,
+  ];
+  const primaryPrompt = [
+    ...basePromptParts,
+    `Use this skin tone direction: ${input.skinToneDirection}.`,
+    `Use this facial-feature direction: ${input.featureDirection}.`,
+    `Use this hair direction: ${input.hairDirection}.`,
   ].join(" ");
+  const compatibilityPrompt = [
+    ...basePromptParts,
+    `Use this skin tone direction: ${input.skinToneDirection}.`,
+    `Use this hair direction: ${input.hairDirection}.`,
+  ].join(" ");
+  const minimalPrompt = basePromptParts.join(" ");
 
   const tryGenerate = async (args: Record<string, unknown>) => {
-    const response = await client.images.generate(args as never);
-    const url = response.data?.[0]?.url;
-    if (url) {
-      return url;
+    try {
+      const response = await client.images.generate(args as never);
+      const url = response.data?.[0]?.url;
+      if (url) {
+        return url;
+      }
+
+      const b64 = response.data?.[0]?.b64_json;
+      if (b64) {
+        return `data:image/png;base64,${b64}`;
+      }
+    } catch {
+      return null;
     }
 
-    const b64 = response.data?.[0]?.b64_json;
-    if (b64) {
-      return `data:image/png;base64,${b64}`;
+    return null;
+  };
+
+  const tryModelsForPrompt = async (prompt: string) => {
+    for (const size of ["1024x1536", "1024x1024"] as const) {
+      const gptImage = await tryGenerate({
+        model: "gpt-image-1",
+        prompt,
+        size,
+      });
+      if (gptImage) {
+        return gptImage as string;
+      }
+    }
+
+    for (const size of ["1024x1792", "1024x1024"] as const) {
+      const dalle3 = await tryGenerate({
+        model: "dall-e-3",
+        prompt,
+        n: 1,
+        size,
+        response_format: "url",
+      });
+      if (dalle3) {
+        return dalle3 as string;
+      }
+    }
+
+    for (const size of ["1024x1024", "512x512"] as const) {
+      const dalle2 = await tryGenerate({
+        model: "dall-e-2",
+        prompt,
+        n: 1,
+        size,
+        response_format: "url",
+      });
+      if (dalle2) {
+        return dalle2 as string;
+      }
     }
 
     return null;
   };
 
   try {
-    const gptImage = await tryGenerate({
-      model: "gpt-image-1",
-      prompt,
-      size: "1024x1024",
-    });
-    if (gptImage) {
-      return gptImage;
+    const primary = await tryModelsForPrompt(primaryPrompt);
+    if (primary) {
+      return primary;
     }
 
-    const dalle3 = await tryGenerate({
-      model: "dall-e-3",
-      prompt,
-      n: 1,
-      size: "1024x1024",
-      response_format: "url",
-    });
-    if (dalle3) {
-      return dalle3;
+    const compatibility = await tryModelsForPrompt(compatibilityPrompt);
+    if (compatibility) {
+      return compatibility;
     }
 
-    const dalle2 = await tryGenerate({
-      model: "dall-e-2",
-      prompt,
-      n: 1,
-      size: "512x512",
-      response_format: "url",
-    });
-    if (dalle2) {
-      return dalle2;
+    const minimal = await tryModelsForPrompt(minimalPrompt);
+    if (minimal) {
+      return minimal;
     }
   } catch (error) {
     console.error("Failed to generate opponent portrait", {
@@ -344,7 +587,7 @@ async function generateOpponentPortrait(input: {
 }
 
 export async function POST(request: Request) {
-  const actor = requireActorId(request);
+  const actor = await requireActorId(request);
   if ("response" in actor) {
     return actor.response;
   }
@@ -387,8 +630,10 @@ export async function POST(request: Request) {
       `Topic focus: ${topic}`,
       `Shuffle seed: ${nonce}`,
       "Each opponent needs: codename, narrative, intelligence, difficulty.",
+      "Use codename formats that avoid real first names and avoid gender-coded naming.",
       "Narrative must be one paragraph with exactly 2-3 short sentences and no line breaks.",
       "Keep each sentence concise, simple, fun, and easy to read.",
+      "Use gender-neutral phrasing in narrative; avoid he/him and she/her pronouns.",
       "Make personalities distinct and fun, with varied challenge levels.",
     ].join("\n"),
     mockResponse: buildMockOpponents(count),
@@ -401,18 +646,39 @@ export async function POST(request: Request) {
       FALLBACK_OPPONENTS[opponents.length % FALLBACK_OPPONENTS.length] as OpponentSpec,
     );
   }
+  const appearancePlan = buildAppearancePlan({
+    count,
+    topic,
+    nonce,
+    usedAppearance: parsed.data.usedAppearance,
+  });
   const opponentsWithImages = await Promise.all(
-    opponents.map(async (opponent, index) => ({
-      ...opponent,
-      imageUrl: await generateOpponentPortrait({
-        codename: opponent.codename,
-        narrative: opponent.narrative,
-        intelligence: opponent.intelligence,
-        difficulty: opponent.difficulty,
-        topic,
-        nonce: `${nonce}-${index + 1}`,
-      }),
-    })),
+    opponents.map(async (opponent, index) => {
+      const appearance = appearancePlan[index] ?? {
+        skinTone: SKIN_TONE_BUCKET_OPTIONS[0] as AppearanceAxisOption,
+        feature: FEATURE_PROFILE_OPTIONS[0] as AppearanceAxisOption,
+        hair: HAIR_PROFILE_OPTIONS[0] as AppearanceAxisOption,
+      };
+      return {
+        ...opponent,
+        imageUrl: await generateOpponentPortrait({
+          codename: opponent.codename,
+          narrative: opponent.narrative,
+          intelligence: opponent.intelligence,
+          difficulty: opponent.difficulty,
+          topic,
+          nonce: `${nonce}-${index + 1}`,
+          skinToneDirection: appearance.skinTone.prompt,
+          featureDirection: appearance.feature.prompt,
+          hairDirection: appearance.hair.prompt,
+        }),
+        appearance: {
+          skinToneBucket: appearance.skinTone.id,
+          featureProfile: appearance.feature.id,
+          hairProfile: appearance.hair.id,
+        },
+      };
+    }),
   );
 
   return jsonSuccess({

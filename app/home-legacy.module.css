@@ -1,0 +1,248 @@
+.page {
+  min-height: 100vh;
+  padding: 72px 0 24px;
+  background-color: #ffffff;
+  background-image: url("/images/brick.png");
+  color: #000000;
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+.container {
+  width: min(1200px, calc(100% - 24px));
+  margin: 0 auto;
+}
+
+.mainhead {
+  margin-top: 24px;
+  display: flex;
+  align-items: flex-end;
+  gap: 24px;
+  clear: both;
+}
+
+.ttlogo {
+  flex: 0 0 400px;
+  padding-left: 24px;
+  margin-right: auto;
+}
+
+.navbar {
+  display: flex;
+  flex-wrap: wrap;
+  overflow: visible;
+  align-items: center;
+  gap: 4px;
+}
+
+.navbarLink {
+  display: block;
+  padding: 14px 16px;
+  font-size: 16px;
+  color: #000000;
+  text-align: center;
+  text-decoration: none;
+}
+
+.navbarLink:hover {
+  background-color: #c63232;
+  color: #ffffff;
+}
+
+.columns {
+  display: flex;
+  align-items: flex-start;
+  gap: 24px;
+}
+
+.column {
+  width: 550px;
+}
+
+.columnhead {
+  width: 400px;
+  margin-top: 12px;
+  margin-left: 68px;
+  border: 1px solid #000000;
+  background-color: #ffffff;
+  padding: 12px;
+  text-align: center;
+  font-size: 18px;
+  color: #000000;
+}
+
+.red {
+  background-color: #c63232;
+  color: #ffffff;
+}
+
+.columnheadTitle {
+  font-size: 24px;
+}
+
+.contentbox {
+  width: 524px;
+  margin-top: 24px;
+  border: 1px solid #c63232;
+  background-color: #ffffff;
+  padding: 12px;
+  font-size: 16px;
+  line-height: 24px;
+  color: #000000;
+}
+
+.textlink {
+  color: #000000;
+  text-decoration: underline;
+}
+
+.textlink:hover {
+  color: #5c5c5c;
+  text-decoration: none;
+}
+
+.loginhead {
+  width: 400px;
+  margin-top: 12px;
+  margin-left: 68px;
+  border: 1px solid #000000;
+  background-color: #ffffff;
+  padding: 22px;
+  text-align: center;
+}
+
+.loginlink {
+  color: #c63232;
+  font-size: 24px;
+  text-decoration: none;
+}
+
+.loginhint {
+  margin-top: 6px;
+  font-size: 14px;
+  color: #444444;
+}
+
+.authInline {
+  width: 400px;
+  margin-top: 12px;
+  margin-left: 68px;
+  margin-bottom: 24px;
+}
+
+.authInline :global(.max-w-xs) {
+  max-width: 100%;
+}
+
+.toolbox {
+  width: 524px;
+  margin-top: 12px;
+  border: 1px solid #000000;
+  padding: 24px 12px;
+  text-align: center;
+  font-size: 24px;
+}
+
+.woi {
+  background-color: #fcfdc2;
+}
+
+.quipx {
+  background-color: #ddebf8;
+}
+
+.disabledTool {
+  position: relative;
+  opacity: 0.75;
+  cursor: not-allowed;
+}
+
+.disabledToolLink {
+  pointer-events: none;
+}
+
+.inDevelopmentBadge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 4px 8px;
+  border: 1px solid #000000;
+  background-color: #fff7cf;
+  font-size: 12px;
+  line-height: 1;
+  opacity: 0;
+  transform: translateY(-2px);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.disabledTool:hover .inDevelopmentBadge {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.toollink {
+  color: #000000;
+  text-decoration: none;
+}
+
+.toollink:hover {
+  color: #5c5c5c;
+}
+
+.toolStats {
+  width: 100%;
+  margin-top: 8px;
+  display: inline-flex;
+  gap: 12px;
+  border: none;
+  background-color: #ffffff;
+}
+
+.toolStatsImage {
+  flex: 0 0 240px;
+}
+
+.toolStatsContent {
+  flex: 1;
+  margin-top: 2px;
+  font-size: 16px;
+  line-height: 26px;
+}
+
+@media (max-width: 1240px) {
+  .container {
+    width: min(760px, calc(100% - 24px));
+  }
+
+  .mainhead {
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .ttlogo {
+    flex: 0 0 auto;
+    margin-right: 0;
+    padding-left: 0;
+  }
+
+  .columns {
+    flex-direction: column;
+  }
+
+  .column {
+    width: 100%;
+  }
+
+  .columnhead,
+  .contentbox,
+  .loginhead,
+  .authInline,
+  .toolbox {
+    width: 100%;
+    margin-left: 0;
+    box-sizing: border-box;
+  }
+
+  .toolStats {
+    flex-direction: column;
+  }
+}

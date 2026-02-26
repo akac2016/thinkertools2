@@ -23,6 +23,11 @@ alter table public.woi_template_rules enable row level security;
 alter table public.woi_template_moves enable row level security;
 alter table public.woi_template_levels enable row level security;
 alter table public.woi_games enable row level security;
+alter table public.woi_game_slots enable row level security;
+alter table public.woi_game_invites enable row level security;
+alter table public.woi_game_viewers enable row level security;
+alter table public.woi_game_join_links enable row level security;
+alter table public.woi_roster_presets enable row level security;
 alter table public.woi_turns enable row level security;
 
 alter table public.event_log enable row level security;
@@ -70,6 +75,38 @@ as $$
   );
 $$;
 
+create or replace function public.has_filled_human_seat(_game_id uuid, _user_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.woi_game_slots s
+    where s.game_id = _game_id
+      and s.seat_type = 'human'
+      and s.assigned_user_id = _user_id
+  );
+$$;
+
+create or replace function public.has_active_viewer_session(_game_id uuid, _user_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.woi_game_viewers v
+    where v.game_id = _game_id
+      and v.user_id = _user_id
+      and v.left_at is null
+  );
+$$;
+
 create or replace function public.can_read_game(_game_id uuid)
 returns boolean
 language sql
@@ -85,6 +122,8 @@ as $$
         g.is_public = true
         or g.creator_id = public.current_app_user_id()
         or public.is_team_member(g.team_id)
+        or public.has_filled_human_seat(g.id, public.current_app_user_id())
+        or public.has_active_viewer_session(g.id, public.current_app_user_id())
       )
   );
 $$;
@@ -125,6 +164,11 @@ drop policy if exists woi_template_rules_visible_select on public.woi_template_r
 drop policy if exists woi_template_moves_visible_select on public.woi_template_moves;
 drop policy if exists woi_template_levels_visible_select on public.woi_template_levels;
 drop policy if exists woi_games_visible_select on public.woi_games;
+drop policy if exists woi_game_slots_visible_select on public.woi_game_slots;
+drop policy if exists woi_game_invites_visible_select on public.woi_game_invites;
+drop policy if exists woi_game_viewers_visible_select on public.woi_game_viewers;
+drop policy if exists woi_game_join_links_visible_select on public.woi_game_join_links;
+drop policy if exists woi_roster_presets_owner_select on public.woi_roster_presets;
 drop policy if exists woi_turns_visible_select on public.woi_turns;
 
 drop policy if exists comments_visible_select on public.comments;
@@ -251,7 +295,42 @@ using (
   is_public = true
   or creator_id = public.current_app_user_id()
   or public.is_team_member(team_id)
+  or public.has_filled_human_seat(id, public.current_app_user_id())
+  or public.has_active_viewer_session(id, public.current_app_user_id())
 );
+
+create policy woi_game_slots_visible_select
+on public.woi_game_slots
+for select
+to anon, authenticated
+using (public.can_read_game(game_id));
+
+create policy woi_game_invites_visible_select
+on public.woi_game_invites
+for select
+to authenticated
+using (
+  created_by = public.current_app_user_id()
+  or invited_user_id = public.current_app_user_id()
+);
+
+create policy woi_game_viewers_visible_select
+on public.woi_game_viewers
+for select
+to anon, authenticated
+using (public.can_read_game(game_id));
+
+create policy woi_game_join_links_visible_select
+on public.woi_game_join_links
+for select
+to authenticated
+using (created_by = public.current_app_user_id());
+
+create policy woi_roster_presets_owner_select
+on public.woi_roster_presets
+for select
+to authenticated
+using (owner_user_id = public.current_app_user_id());
 
 create policy woi_turns_visible_select
 on public.woi_turns
