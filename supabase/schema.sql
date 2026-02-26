@@ -10,11 +10,79 @@ create extension if not exists pgcrypto;
 -- ----------
 create table if not exists public.users (
   id uuid primary key default gen_random_uuid(),
+  username text,
   name text not null,
   email text unique,
   color text not null default '#1f2937',
   created_at timestamptz not null default now()
 );
+
+alter table public.users
+  add column if not exists username text;
+
+update public.users
+set username = lower(trim(username))
+where username is not null
+  and username <> lower(trim(username));
+
+update public.users u
+set username = (
+  case
+    when prepared.candidate <> '' then left(prepared.candidate, 20) || '_' || substring(replace(u.id::text, '-', '') from 1 for 8)
+    else 'user_' || substring(replace(u.id::text, '-', '') from 1 for 8)
+  end
+)
+from (
+  select
+    id,
+    regexp_replace(
+      lower(
+        coalesce(
+          nullif(trim(username), ''),
+          nullif(trim(name), ''),
+          nullif(split_part(coalesce(email, ''), '@', 1), ''),
+          ''
+        )
+      ),
+      '[^a-z0-9._-]+',
+      '',
+      'g'
+    ) as candidate
+  from public.users
+) prepared
+where u.id = prepared.id
+  and (
+    u.username is null
+    or btrim(u.username) = ''
+    or u.username !~ '^[a-z0-9._-]{3,32}$'
+  );
+
+with duplicate_usernames as (
+  select
+    id,
+    row_number() over (
+      partition by username
+      order by created_at asc, id asc
+    ) as duplicate_rank
+  from public.users
+)
+update public.users u
+set username = left(u.username, 20) || '_' || substring(replace(u.id::text, '-', '') from 1 for 8)
+from duplicate_usernames d
+where u.id = d.id
+  and d.duplicate_rank > 1;
+
+alter table public.users
+  alter column username set not null;
+
+alter table public.users
+  drop constraint if exists users_username_format;
+
+alter table public.users
+  add constraint users_username_format
+  check (username ~ '^[a-z0-9._-]{3,32}$');
+
+create unique index if not exists idx_users_username on public.users(username);
 
 create table if not exists public.teams (
   id uuid primary key default gen_random_uuid(),
@@ -169,8 +237,16 @@ create table if not exists public.woi_games (
   question text not null,
   description text not null,
   is_public boolean not null default false,
-  status text not null default 'in_play' check (status in ('in_play', 'reflect', 'finished')),
+  status text not null default 'in_play' check (status in ('lobby', 'in_play', 'reflect', 'finished')),
   current_player_id uuid references public.users(id) on delete set null,
+  total_player_slots integer not null default 2 check (total_player_slots >= 1 and total_player_slots <= 20),
+  ai_player_slots integer not null default 0 check (ai_player_slots >= 0 and ai_player_slots <= 4),
+  lobby_visibility text not null default 'hidden'
+    check (lobby_visibility in ('hidden', 'listed')),
+  join_link_enabled boolean not null default false,
+  creator_role text not null default 'player' check (creator_role in ('player', 'viewer')),
+  seat_claims_locked boolean not null default false,
+  check (ai_player_slots <= total_player_slots),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -186,6 +262,105 @@ create table if not exists public.woi_game_ai_profiles (
   ai_player_count integer not null default 0 check (ai_player_count >= 0 and ai_player_count <= 11),
   opponents jsonb not null default '[]'::jsonb,
   created_by uuid references public.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.woi_game_slots (
+  id uuid primary key default gen_random_uuid(),
+  game_id uuid not null references public.woi_games(id) on delete cascade,
+  slot_index integer not null check (slot_index >= 1 and slot_index <= 20),
+  seat_type text not null check (seat_type in ('human', 'ai')),
+  state text not null check (state in ('open', 'invited', 'filled', 'released', 'locked')),
+  assigned_user_id uuid references public.users(id) on delete set null,
+  ai_profile jsonb default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (game_id, slot_index),
+  check (
+    (seat_type = 'human' and (ai_profile is null or ai_profile = '{}'::jsonb))
+    or
+    (seat_type = 'ai' and assigned_user_id is null)
+  )
+);
+
+create table if not exists public.woi_game_invites (
+  id uuid primary key default gen_random_uuid(),
+  game_id uuid not null references public.woi_games(id) on delete cascade,
+  slot_id uuid not null references public.woi_game_slots(id) on delete cascade,
+  channel text not null check (channel in ('platform_search', 'email', 'join_link')),
+  invited_user_id uuid references public.users(id) on delete set null,
+  invited_email text,
+  token_hash text,
+  status text not null
+    check (status in ('pending', 'sent', 'accepted', 'declined', 'expired', 'revoked', 'failed')),
+  expires_at timestamptz,
+  accepted_by_user_id uuid references public.users(id) on delete set null,
+  accepted_at timestamptz,
+  created_by uuid not null references public.users(id) on delete restrict,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_woi_game_invites_game_status
+  on public.woi_game_invites(game_id, status);
+
+create index if not exists idx_woi_game_invites_slot_status
+  on public.woi_game_invites(slot_id, status);
+
+create index if not exists idx_woi_game_invites_email
+  on public.woi_game_invites(invited_email);
+
+create index if not exists idx_woi_game_invites_user_status
+  on public.woi_game_invites(invited_user_id, status);
+
+create table if not exists public.woi_game_viewers (
+  id uuid primary key default gen_random_uuid(),
+  game_id uuid not null references public.woi_games(id) on delete cascade,
+  user_id uuid references public.users(id) on delete cascade,
+  anon_session_id text,
+  source text not null check (source in ('lobby', 'join_link', 'public_url', 'manual')),
+  joined_at timestamptz not null default now(),
+  last_seen_at timestamptz not null default now(),
+  left_at timestamptz,
+  check (
+    (user_id is not null and anon_session_id is null)
+    or
+    (user_id is null and anon_session_id is not null)
+  )
+);
+
+create index if not exists idx_woi_game_viewers_game_active_seen
+  on public.woi_game_viewers(game_id, left_at, last_seen_at);
+
+create unique index if not exists idx_woi_game_viewers_active_auth_unique
+  on public.woi_game_viewers(game_id, user_id)
+  where user_id is not null and left_at is null;
+
+create unique index if not exists idx_woi_game_viewers_active_anon_unique
+  on public.woi_game_viewers(game_id, anon_session_id)
+  where anon_session_id is not null and left_at is null;
+
+create table if not exists public.woi_game_join_links (
+  id uuid primary key default gen_random_uuid(),
+  game_id uuid not null references public.woi_games(id) on delete cascade,
+  token_hash text not null unique,
+  status text not null check (status in ('active', 'revoked', 'expired')),
+  max_claims integer check (max_claims is null or max_claims > 0),
+  claims_count integer not null default 0,
+  expires_at timestamptz,
+  created_by uuid not null references public.users(id) on delete restrict,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.woi_roster_presets (
+  id uuid primary key default gen_random_uuid(),
+  owner_user_id uuid not null references public.users(id) on delete cascade,
+  team_id uuid references public.teams(id) on delete set null,
+  name text not null,
+  source_game_id uuid references public.woi_games(id) on delete set null,
+  slots jsonb not null default '[]'::jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );

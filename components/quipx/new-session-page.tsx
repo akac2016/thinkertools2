@@ -8,8 +8,9 @@ import { DataPanel, JsonView, QuipxShell } from "@/components/quipx/ui";
 
 export function QuipxNewSessionPage() {
   const router = useRouter();
-  const [title, setTitle] = useState("Prepare product launch narrative");
-  const [context, setContext] = useState("Audience: investors and early design partners.");
+  const [teamId, setTeamId] = useState("10000000-0000-4000-8000-000000000001");
+  const [subject, setSubject] = useState("Prepare product launch narrative");
+  const [objectives, setObjectives] = useState("Audience: investors and early design partners.");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [response, setResponse] = useState<unknown>(null);
@@ -22,12 +23,20 @@ export function QuipxNewSessionPage() {
     try {
       const data = await apiFetch<unknown>("/api/quipx/sessions", {
         method: "POST",
-        body: JSON.stringify({ title, context }),
+        body: JSON.stringify({
+          teamId: teamId.trim(),
+          subject: subject.trim(),
+          objectives: objectives.trim(),
+        }),
       });
       setResponse(data);
 
       const parsed = parseObject(data);
-      const sessionId = parseString(parsed?.sessionId ?? parsed?.id, "");
+      const sessionObject = parseObject(parsed?.session);
+      const sessionId = parseString(
+        sessionObject?.id ?? parsed?.sessionId ?? parsed?.id,
+        "",
+      );
       if (sessionId) {
         router.push(`/quipx/sessions/${sessionId}/discuss`);
       }
@@ -48,20 +57,30 @@ export function QuipxNewSessionPage() {
         <DataPanel title="Session Setup">
           <form className="space-y-3" onSubmit={onSubmit}>
             <label className="grid gap-1 text-sm text-slate-700">
-              Title
+              Team ID (UUID)
               <input
-                value={title}
-                onChange={(event) => setTitle(event.target.value)}
+                value={teamId}
+                onChange={(event) => setTeamId(event.target.value)}
                 className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900"
                 required
               />
             </label>
 
             <label className="grid gap-1 text-sm text-slate-700">
-              Context
+              Subject
+              <input
+                value={subject}
+                onChange={(event) => setSubject(event.target.value)}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900"
+                required
+              />
+            </label>
+
+            <label className="grid gap-1 text-sm text-slate-700">
+              Objectives
               <textarea
-                value={context}
-                onChange={(event) => setContext(event.target.value)}
+                value={objectives}
+                onChange={(event) => setObjectives(event.target.value)}
                 rows={4}
                 className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900"
               />

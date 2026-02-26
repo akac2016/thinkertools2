@@ -360,7 +360,7 @@ function computeTurnForecast(input: {
 }
 
 export async function POST(request: Request, context: RouteContext) {
-  const actor = requireActorId(request);
+  const actor = await requireActorId(request);
   if ("response" in actor) {
     return actor.response;
   }

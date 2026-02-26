@@ -4,7 +4,14 @@ import { z } from "zod";
 
 import { jsonError, jsonSuccess } from "@/lib/http";
 import { supabaseAdmin } from "@/lib/supabase/admin";
-import { getUsersByIds, jsonDbError, uniqueIds, type UserRow, type WoiGameRow } from "@/lib/woi";
+import {
+  WOI_GAME_SELECT_COLUMNS,
+  getUsersByIds,
+  jsonDbError,
+  uniqueIds,
+  type UserRow,
+  type WoiGameRow,
+} from "@/lib/woi";
 
 const querySchema = z.object({
   q: z.preprocess(
@@ -53,9 +60,7 @@ export async function GET(request: Request) {
 
   const { data: gamesData, error: gamesError } = await supabaseAdmin
     .from("woi_games")
-    .select(
-      "id,template_id,team_id,creator_id,question,description,is_public,status,current_player_id,created_at,updated_at",
-    )
+    .select(WOI_GAME_SELECT_COLUMNS)
     .eq("is_public", true)
     .order("updated_at", { ascending: false })
     .limit(preFilterLimit);

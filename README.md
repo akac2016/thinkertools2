@@ -20,6 +20,20 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## Authentication
+
+User accounts are powered by Supabase Auth (email/password).
+
+1. Set these variables in `.env.local`:
+   - `NEXT_PUBLIC_SUPABASE_URL`
+   - `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
+   - `SUPABASE_SECRET_KEY`
+2. Run the app with `npm run dev`.
+3. Use the auth panel in the top-right corner to sign up or sign in.
+
+Authenticated API requests send a Supabase bearer token automatically from the client.
+Server routes resolve the actor from this token and sync a matching row in `public.users`.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:

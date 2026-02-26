@@ -1,10 +1,19 @@
 "use client";
 
-import { apiFetch, parseArray, parseObject, parseString } from "@/components/quipx/client";
+import {
+  isApiRequestError,
+  apiFetch,
+  parseArray,
+  parseObject,
+  parseString,
+  setWoiAnonSessionId,
+} from "@/components/quipx/client";
+import { normalizeViewerJoinErrorMessage } from "@/lib/woi-lobby-rules";
 
 export type WoiUser = {
   id: string;
   name: string;
+  username?: string | null;
   color: string | null;
 };
 
@@ -29,6 +38,40 @@ export type WoiGameSummary = {
   creator: WoiUser | null;
   currentPlayer: WoiUser | null;
   template: WoiTemplateSummary | null;
+};
+
+export type WoiLobbyGameSummary = {
+  id: string;
+  question: string;
+  description: string;
+  status: string;
+  updatedAt: string;
+  openHumanSeats: number;
+  seatClaimsLocked: boolean;
+  joinLinkEnabled: boolean;
+  alreadyJoinedAsPlayer: boolean;
+  creator: WoiUser | null;
+  template: WoiTemplateSummary | null;
+};
+
+export type WoiSeatClaimResult = {
+  gameId: string;
+  slotId: string;
+  alreadyClaimed: boolean;
+  remainingOpenHumanSeats: number;
+};
+
+export type WoiViewerJoinResult = {
+  gameId: string;
+  anonSessionId: string | null;
+  wasExistingSession: boolean;
+};
+
+export type WoiJoinByLinkResult = {
+  gameId: string;
+  joinedAs: "player" | "viewer";
+  anonSessionId: string | null;
+  alreadyClaimed: boolean | null;
 };
 
 export type WoiLevel = {
@@ -70,12 +113,108 @@ export type WoiTeamSummary = {
   name: string;
 };
 
+export type WoiUserSearchResult = WoiUser & {
+  email: string | null;
+};
+
+export type WoiHumanSeatInstructionInput =
+  | {
+      mode: "platform_user";
+      invitedUserId: string;
+    }
+  | {
+      mode: "email";
+      invitedEmail: string;
+    }
+  | {
+      mode: "open";
+    };
+
+export type WoiRosterPresetSlot = {
+  mode: "platform_user" | "email" | "open";
+  invitedUserId?: string;
+  invitedEmail?: string;
+  userName?: string;
+  userEmail?: string | null;
+};
+
+export type WoiRosterPreset = {
+  id: string;
+  name: string;
+  teamId: string | null;
+  sourceGameId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  slots: WoiRosterPresetSlot[];
+};
+
+export type WoiCreateWithSlotsInput = {
+  templateId: string;
+  teamId?: string;
+  question: string;
+  description: string;
+  isPublic: boolean;
+  totalPlayerSlots: number;
+  aiPlayerSlots: number;
+  creatorRole: "player" | "viewer";
+  humanSeats: WoiHumanSeatInstructionInput[];
+  opponents?: WoiGeneratedOpponent[];
+  presetId?: string;
+  lobbyVisibility?: "hidden" | "listed";
+  joinLinkEnabled?: boolean;
+};
+
+export type WoiCreateWithSlotsResult = {
+  game: WoiGameSummary;
+  status: string;
+  slots: Array<{
+    id: string;
+    slotIndex: number;
+    seatType: "human" | "ai";
+    state: "open" | "invited" | "filled" | "released" | "locked";
+    assignedUserId: string | null;
+    aiProfile: Record<string, unknown> | null;
+    invite: {
+      id: string;
+      channel: "platform_search" | "email" | "join_link";
+      status: string;
+      invitedUserId: string | null;
+      invitedEmail: string | null;
+    } | null;
+  }>;
+  inviteSummary: {
+    total: number;
+    pending: number;
+  };
+  viewerSummary: {
+    activeCount: number;
+  };
+  joinLink: {
+    enabled: boolean;
+    id?: string;
+    status?: "active" | "revoked" | "expired" | "unavailable";
+    token?: string | null;
+    shareUrl?: string | null;
+  };
+  presetId: string | null;
+};
+
+export type WoiStartLobbyGameResult = {
+  game: WoiGameSummary;
+  startedAt: string;
+};
+
 export type WoiGeneratedOpponent = {
   codename: string;
   narrative: string;
   intelligence: "novice" | "analytical" | "strategic" | "expert";
   difficulty: "easy" | "medium" | "hard" | "adaptive";
   imageUrl: string;
+  appearance: {
+    skinToneBucket: string | null;
+    featureProfile: string | null;
+    hairProfile: string | null;
+  } | null;
 };
 
 export type WoiSubjectQuestion = {
@@ -252,7 +391,7 @@ function readNumberValue(record: Record<string, unknown>, keys: string[]): numbe
 function normalizeUser(value: unknown): WoiUser | null {
   if (typeof value === "string" && value.trim()) {
     const id = value.trim();
-    return { id, name: id, color: null };
+    return { id, name: id, username: null, color: null };
   }
 
   const record = parseObject(value);
@@ -271,6 +410,7 @@ function normalizeUser(value: unknown): WoiUser | null {
   return {
     id,
     name,
+    username: readNullableStringValue(record, ["username", "user_name"]),
     color: readNullableStringValue(record, ["color", "fontcolor"]),
   };
 }
@@ -348,6 +488,83 @@ function normalizeTeamSummary(value: unknown): WoiTeamSummary | null {
   };
 }
 
+function normalizeUserSearchResult(value: unknown): WoiUserSearchResult | null {
+  const user = normalizeUser(value);
+  if (!user) {
+    return null;
+  }
+
+  const record = parseObject(value) ?? {};
+  return {
+    ...user,
+    email: readNullableStringValue(record, ["email"]),
+  };
+}
+
+function normalizeRosterPresetSlot(value: unknown): WoiRosterPresetSlot | null {
+  const record = parseObject(value);
+  if (!record) {
+    return null;
+  }
+
+  const rawMode = readStringValue(record, ["mode", "channel", "inviteMode"], "");
+  if (rawMode === "platform_user" || rawMode === "platform_search") {
+    const invitedUserId = readStringValue(
+      record,
+      ["invitedUserId", "invited_user_id", "userId", "user_id"],
+      "",
+    );
+    if (!invitedUserId) {
+      return null;
+    }
+    return {
+      mode: "platform_user",
+      invitedUserId,
+      userName: readStringValue(record, ["userName", "user_name"], ""),
+      userEmail: readNullableStringValue(record, ["userEmail", "user_email"]),
+    };
+  }
+
+  if (rawMode === "email") {
+    const invitedEmail = readStringValue(
+      record,
+      ["invitedEmail", "invited_email", "email"],
+      "",
+    );
+    if (!invitedEmail) {
+      return null;
+    }
+    return {
+      mode: "email",
+      invitedEmail,
+    };
+  }
+
+  if (rawMode === "open" || rawMode === "open_lobby" || rawMode === "join_link") {
+    return {
+      mode: "open",
+    };
+  }
+
+  return null;
+}
+
+function normalizeRosterPreset(value: unknown, index: number): WoiRosterPreset {
+  const record = parseObject(value) ?? {};
+
+  return {
+    id: readStringValue(record, ["id"], `preset-${index + 1}`),
+    name: readStringValue(record, ["name"], `Preset ${index + 1}`),
+    teamId: readNullableStringValue(record, ["teamId", "team_id"]),
+    sourceGameId: readNullableStringValue(record, ["sourceGameId", "source_game_id"]),
+    createdAt: readStringValue(record, ["createdAt", "created_at"], ""),
+    updatedAt: readStringValue(record, ["updatedAt", "updated_at"], ""),
+    slots: (readArray(record, ["slots", "entries"]) ?? [])
+      .map((slot) => normalizeRosterPresetSlot(slot))
+      .filter((slot): slot is WoiRosterPresetSlot => Boolean(slot)),
+  };
+}
+
 function normalizeTemplateCatalogEntry(value: unknown): WoiTemplateCatalogEntry | null {
   const template = normalizeTemplate(value);
   if (!template) {
@@ -384,6 +601,41 @@ function normalizeGameSummary(value: unknown, index: number): WoiGameSummary {
     creator,
     currentPlayer,
     template: normalizeTemplate(readObject(record, ["template"])),
+  };
+}
+
+function normalizeLobbyGameSummary(value: unknown, index: number): WoiLobbyGameSummary {
+  const record = parseObject(value) ?? {};
+
+  return {
+    id: readStringValue(record, ["id", "game_id"], `lobby-game-${index + 1}`),
+    question: readStringValue(record, ["question", "game_name"], "Untitled game"),
+    description: readStringValue(record, ["description", "game_description"], ""),
+    status: readStringValue(record, ["status"], "lobby"),
+    updatedAt: readStringValue(record, ["updatedAt", "updated_at", "created_at"], ""),
+    openHumanSeats:
+      readNumberValue(record, ["openHumanSeats", "open_human_seats"]) ?? 0,
+    seatClaimsLocked: readBooleanValue(
+      record,
+      ["seatClaimsLocked", "seat_claims_locked", "playerClaimsLocked"],
+      false,
+    ),
+    joinLinkEnabled: readBooleanValue(
+      record,
+      ["joinLinkEnabled", "join_link_enabled"],
+      false,
+    ),
+    alreadyJoinedAsPlayer: readBooleanValue(
+      record,
+      ["alreadyJoinedAsPlayer", "already_joined_as_player"],
+      false,
+    ),
+    creator:
+      normalizeUser(readObject(record, ["creator"])) ??
+      normalizeUser(readStringValue(record, ["creator_id"], "")),
+    template:
+      normalizeTemplate(readObject(record, ["template"])) ??
+      normalizeTemplate(readObject(record, ["woi_templates"])),
   };
 }
 
@@ -508,12 +760,144 @@ function coerceListPayload(value: unknown, keys: string[]): unknown[] {
   return [];
 }
 
+export function getViewerJoinErrorMessage(error: unknown, fallbackMessage?: string) {
+  if (isApiRequestError(error)) {
+    return normalizeViewerJoinErrorMessage({
+      code: error.code,
+      message: error.message,
+      fallbackMessage,
+    });
+  }
+
+  return normalizeViewerJoinErrorMessage({
+    message: error instanceof Error ? error.message : null,
+    fallbackMessage,
+  });
+}
+
 export async function fetchTeamGames(teamId: string): Promise<WoiGameSummary[]> {
   const params = new URLSearchParams({ teamId });
   const payload = await apiFetch<unknown>(`/api/woi/games?${params.toString()}`);
 
   const games = coerceListPayload(payload, ["games", "items"]);
   return games.map((entry, index) => normalizeGameSummary(entry, index));
+}
+
+export async function fetchLobbyGames(): Promise<WoiLobbyGameSummary[]> {
+  const payload = await apiFetch<unknown>("/api/woi/lobby/games");
+
+  const games = coerceListPayload(payload, ["games", "items", "results"]);
+  return games.map((entry, index) => normalizeLobbyGameSummary(entry, index));
+}
+
+export async function claimLobbySeat(gameId: string): Promise<WoiSeatClaimResult> {
+  const payload = await apiFetch<unknown>(
+    `/api/woi/games/${encodeURIComponent(gameId)}/claim-slot`,
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    },
+  );
+
+  const root = parseObject(payload) ?? {};
+  const slotRecord = readObject(root, ["slot"]) ?? {};
+
+  return {
+    gameId: readStringValue(root, ["gameId", "game_id"], gameId),
+    slotId: readStringValue(slotRecord, ["id", "slot_id"], ""),
+    alreadyClaimed: readBooleanValue(root, ["alreadyClaimed", "already_claimed"], false),
+    remainingOpenHumanSeats:
+      readNumberValue(root, ["remainingOpenHumanSeats", "remaining_open_human_seats"]) ?? 0,
+  };
+}
+
+export async function startLobbyGame(gameId: string): Promise<WoiStartLobbyGameResult> {
+  const payload = await apiFetch<unknown>(
+    `/api/woi/games/${encodeURIComponent(gameId)}/start`,
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    },
+  );
+
+  const root = parseObject(payload) ?? {};
+  const gameRecord = parseObject(root.game) ?? {};
+
+  return {
+    game: normalizeGameSummary(gameRecord, 0),
+    startedAt: readStringValue(root, ["startedAt", "started_at"], ""),
+  };
+}
+
+export async function joinGameAsViewer(input: {
+  gameId: string;
+  source?: "lobby" | "join_link" | "public_url" | "manual";
+}): Promise<WoiViewerJoinResult> {
+  const payload = await apiFetch<unknown>(
+    `/api/woi/games/${encodeURIComponent(input.gameId)}/join-as-viewer`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        source: input.source ?? "manual",
+      }),
+    },
+  );
+
+  const root = parseObject(payload) ?? {};
+  const anonSessionId =
+    readNullableStringValue(root, ["anonSessionId", "anon_session_id"]) ?? null;
+  if (anonSessionId) {
+    setWoiAnonSessionId(anonSessionId);
+  }
+
+  return {
+    gameId: readStringValue(root, ["gameId", "game_id"], input.gameId),
+    anonSessionId,
+    wasExistingSession: readBooleanValue(
+      root,
+      ["wasExistingSession", "was_existing_session"],
+      false,
+    ),
+  };
+}
+
+export async function joinGameByLink(input: {
+  gameId: string;
+  token: string;
+  joinAs: "player" | "viewer";
+}): Promise<WoiJoinByLinkResult> {
+  const payload = await apiFetch<unknown>(
+    `/api/woi/games/${encodeURIComponent(input.gameId)}/join-by-link`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        token: input.token.trim(),
+        joinAs: input.joinAs,
+      }),
+    },
+  );
+
+  const root = parseObject(payload) ?? {};
+  const joinedAsRaw = readStringValue(root, ["joinedAs", "joined_as"], input.joinAs);
+  const joinedAs = (joinedAsRaw === "player" ? "player" : "viewer") as
+    | "player"
+    | "viewer";
+
+  const anonSessionId =
+    readNullableStringValue(root, ["anonSessionId", "anon_session_id"]) ?? null;
+  if (joinedAs === "viewer" && anonSessionId) {
+    setWoiAnonSessionId(anonSessionId);
+  }
+
+  return {
+    gameId: readStringValue(root, ["gameId", "game_id"], input.gameId),
+    joinedAs,
+    anonSessionId,
+    alreadyClaimed:
+      joinedAs === "player"
+        ? readBooleanValue(root, ["alreadyClaimed", "already_claimed"], false)
+        : null,
+  };
 }
 
 export async function createGame(input: {
@@ -565,8 +949,129 @@ export async function createQuickstartGame(input: {
   return normalizeGameSummary(gameRecord, 0);
 }
 
+export async function createGameWithSlots(
+  input: WoiCreateWithSlotsInput,
+): Promise<WoiCreateWithSlotsResult> {
+  const payload = await apiFetch<unknown>("/api/woi/games/create-with-slots", {
+    method: "POST",
+    body: JSON.stringify({
+      templateId: input.templateId.trim(),
+      teamId: input.teamId?.trim() || undefined,
+      question: input.question.trim(),
+      description: input.description.trim(),
+      isPublic: input.isPublic,
+      totalPlayerSlots: Math.max(1, Math.min(20, Math.floor(input.totalPlayerSlots))),
+      aiPlayerSlots: Math.max(0, Math.min(4, Math.floor(input.aiPlayerSlots))),
+      creatorRole: input.creatorRole,
+      humanSeats: (input.humanSeats ?? []).map((seat) => {
+        if (seat.mode === "platform_user") {
+          return {
+            mode: "platform_user",
+            userId: seat.invitedUserId,
+          };
+        }
+        if (seat.mode === "email") {
+          return {
+            mode: "email",
+            email: seat.invitedEmail,
+          };
+        }
+        return {
+          mode: "open",
+        };
+      }),
+      opponents: (input.opponents ?? [])
+        .slice(0, Math.max(0, Math.min(4, Math.floor(input.aiPlayerSlots))))
+        .map((opponent) => ({
+          codename: opponent.codename,
+          narrative: opponent.narrative,
+          intelligence: opponent.intelligence,
+          difficulty: opponent.difficulty,
+          imageUrl: opponent.imageUrl,
+        })),
+      presetId: input.presetId?.trim() || undefined,
+      lobbyVisibility: input.lobbyVisibility,
+      joinLinkEnabled: input.joinLinkEnabled,
+    }),
+  });
+
+  const root = parseObject(payload) ?? {};
+  const gameRecord = parseObject(root.game) ?? root;
+  const slots = (readArray(root, ["slots"]) ?? []).map((entry, index): WoiCreateWithSlotsResult["slots"][number] => {
+    const record = parseObject(entry) ?? {};
+    const inviteRecord = parseObject(record.invite);
+    const seatTypeRaw = readStringValue(record, ["seatType", "seat_type"], "human");
+    const stateRaw = readStringValue(record, ["state"], "open");
+
+    return {
+      id: readStringValue(record, ["id"], `slot-${index + 1}`),
+      slotIndex: readNumberValue(record, ["slotIndex", "slot_index"]) ?? index + 1,
+      seatType: seatTypeRaw === "ai" ? "ai" : "human",
+      state:
+        stateRaw === "invited"
+        || stateRaw === "filled"
+        || stateRaw === "released"
+        || stateRaw === "locked"
+          ? stateRaw
+          : "open",
+      assignedUserId: readNullableStringValue(record, ["assignedUserId", "assigned_user_id"]),
+      aiProfile: parseObject(record.aiProfile ?? record.ai_profile),
+      invite: inviteRecord
+        ? {
+            id: readStringValue(inviteRecord, ["id"], ""),
+            channel: (() => {
+              const raw = readStringValue(inviteRecord, ["channel"], "platform_search");
+              return raw === "email" || raw === "join_link" ? raw : "platform_search";
+            })(),
+            status: readStringValue(inviteRecord, ["status"], "pending"),
+            invitedUserId: readNullableStringValue(inviteRecord, ["invitedUserId", "invited_user_id"]),
+            invitedEmail: readNullableStringValue(inviteRecord, ["invitedEmail", "invited_email"]),
+          }
+        : null,
+    };
+  });
+
+  const inviteSummaryRecord = parseObject(root.inviteSummary) ?? {};
+  const joinLinkRecord = parseObject(root.joinLink) ?? {};
+  const viewerSummaryRecord = parseObject(root.viewerSummary) ?? {};
+  const joinLinkStatusRaw = readStringValue(joinLinkRecord, ["status"], "");
+  const normalizedJoinStatus =
+    joinLinkStatusRaw === "active"
+    || joinLinkStatusRaw === "revoked"
+    || joinLinkStatusRaw === "expired"
+    || joinLinkStatusRaw === "unavailable"
+      ? joinLinkStatusRaw
+      : undefined;
+
+  return {
+    game: normalizeGameSummary(gameRecord, 0),
+    status: readStringValue(root, ["status"], "lobby"),
+    slots,
+    inviteSummary: {
+      total: readNumberValue(inviteSummaryRecord, ["total"]) ?? 0,
+      pending: readNumberValue(inviteSummaryRecord, ["pending"]) ?? 0,
+    },
+    viewerSummary: {
+      activeCount: readNumberValue(viewerSummaryRecord, ["activeCount", "active_count"]) ?? 0,
+    },
+    joinLink: {
+      enabled: readBooleanValue(
+        gameRecord,
+        ["joinLinkEnabled", "join_link_enabled"],
+        Boolean(joinLinkRecord && Object.keys(joinLinkRecord).length > 0),
+      ),
+      id: readNullableStringValue(joinLinkRecord, ["id"]) ?? undefined,
+      status: normalizedJoinStatus,
+      token: readNullableStringValue(joinLinkRecord, ["token"]),
+      shareUrl: readNullableStringValue(joinLinkRecord, ["shareUrl", "share_url"]),
+    },
+    presetId: readNullableStringValue(root, ["appliedPresetId", "presetId", "preset_id"]),
+  };
+}
+
 function normalizeGeneratedOpponent(value: unknown, index: number): WoiGeneratedOpponent {
   const record = parseObject(value) ?? {};
+  const appearanceRecord = readObject(record, ["appearance"]) ?? {};
   const intelligenceRaw = readStringValue(record, ["intelligence"], "analytical");
   const difficultyRaw = readStringValue(record, ["difficulty"], "medium");
   const intelligence = (
@@ -585,6 +1090,23 @@ function normalizeGeneratedOpponent(value: unknown, index: number): WoiGenerated
       ? difficultyRaw
       : "medium"
   ) as WoiGeneratedOpponent["difficulty"];
+  const skinToneBucket =
+    readNullableStringValue(appearanceRecord, ["skinToneBucket", "skin_tone_bucket"]) ??
+    readNullableStringValue(record, ["skinToneBucket", "skin_tone_bucket"]);
+  const featureProfile =
+    readNullableStringValue(appearanceRecord, ["featureProfile", "feature_profile"]) ??
+    readNullableStringValue(record, ["featureProfile", "feature_profile"]);
+  const hairProfile =
+    readNullableStringValue(appearanceRecord, ["hairProfile", "hair_profile"]) ??
+    readNullableStringValue(record, ["hairProfile", "hair_profile"]);
+  const appearance =
+    skinToneBucket || featureProfile || hairProfile
+      ? {
+          skinToneBucket,
+          featureProfile,
+          hairProfile,
+        }
+      : null;
 
   return {
     codename: readStringValue(record, ["codename"], `Opponent ${index + 1}`),
@@ -596,6 +1118,7 @@ function normalizeGeneratedOpponent(value: unknown, index: number): WoiGenerated
     intelligence,
     difficulty,
     imageUrl: readStringValue(record, ["imageUrl", "image_url"], ""),
+    appearance,
   };
 }
 
@@ -603,13 +1126,39 @@ export async function generateAiOpponents(input: {
   count: number;
   prompt?: string;
   regenerateNonce?: string;
+  usedAppearance?: {
+    skinToneBuckets?: string[];
+    featureProfiles?: string[];
+    hairProfiles?: string[];
+  };
 }): Promise<WoiGeneratedOpponent[]> {
+  const toUniqueStrings = (values: string[] | undefined) =>
+    Array.from(
+      new Set(
+        (values ?? [])
+          .map((value) => value.trim())
+          .filter((value) => value.length > 0),
+      ),
+    );
+  const skinToneBuckets = toUniqueStrings(input.usedAppearance?.skinToneBuckets);
+  const featureProfiles = toUniqueStrings(input.usedAppearance?.featureProfiles);
+  const hairProfiles = toUniqueStrings(input.usedAppearance?.hairProfiles);
+  const usedAppearance =
+    skinToneBuckets.length || featureProfiles.length || hairProfiles.length
+      ? {
+          skinToneBuckets,
+          featureProfiles,
+          hairProfiles,
+        }
+      : undefined;
+
   const payload = await apiFetch<unknown>("/api/woi/opponents", {
     method: "POST",
     body: JSON.stringify({
       count: Math.max(0, Math.min(4, Math.floor(input.count))),
       prompt: input.prompt?.trim() || undefined,
       regenerateNonce: input.regenerateNonce?.trim() || undefined,
+      usedAppearance,
     }),
   });
 
@@ -730,6 +1279,61 @@ export async function fetchActorTeams(): Promise<WoiTeamSummary[]> {
   return teams
     .map((entry) => normalizeTeamSummary(entry))
     .filter((entry): entry is WoiTeamSummary => Boolean(entry));
+}
+
+export async function fetchTeamMembers(teamId: string): Promise<WoiUserSearchResult[]> {
+  const payload = await apiFetch<unknown>(
+    `/api/woi/teams/${encodeURIComponent(teamId)}/members`,
+  );
+  const members = coerceListPayload(payload, ["members", "items", "results"]);
+
+  return members
+    .map((entry) => parseObject(entry))
+    .map((entry) => normalizeUserSearchResult(entry?.user))
+    .filter((entry): entry is WoiUserSearchResult => Boolean(entry));
+}
+
+export async function searchWoiUsers(
+  input: {
+    query: string;
+    teamId?: string;
+    limit?: number;
+  },
+): Promise<WoiUserSearchResult[]> {
+  const query = input.query.trim();
+  if (query.length < 2) {
+    return [];
+  }
+
+  const params = new URLSearchParams();
+  params.set("q", query);
+  if (input.teamId?.trim()) {
+    params.set("teamId", input.teamId.trim());
+  }
+
+  const payload = await apiFetch<unknown>(`/api/woi/users/search?${params.toString()}`);
+  const users = coerceListPayload(payload, ["users", "items", "results"]);
+  const limit =
+    typeof input.limit === "number" && Number.isFinite(input.limit)
+      ? Math.max(1, Math.min(20, Math.floor(input.limit)))
+      : 8;
+
+  return users
+    .map((entry) => normalizeUserSearchResult(entry))
+    .filter((entry): entry is WoiUserSearchResult => Boolean(entry))
+    .slice(0, limit);
+}
+
+export async function fetchWoiRosterPresets(teamId?: string): Promise<WoiRosterPreset[]> {
+  const params = new URLSearchParams();
+  if (teamId?.trim()) {
+    params.set("teamId", teamId.trim());
+  }
+
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const payload = await apiFetch<unknown>(`/api/woi/roster-presets${suffix}`);
+  const presets = coerceListPayload(payload, ["presets", "items", "results"]);
+  return presets.map((entry, index) => normalizeRosterPreset(entry, index));
 }
 
 export async function fetchTemplates(): Promise<WoiTemplateCatalogEntry[]> {

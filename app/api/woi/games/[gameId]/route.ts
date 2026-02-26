@@ -5,12 +5,12 @@ import { z } from "zod";
 import { jsonError, jsonSuccess } from "@/lib/http";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import {
-  canActorReadGame,
+  canAccessGame,
   getGameById,
   getTeamMembersOrdered,
   getUsersByIds,
   jsonDbError,
-  requireActorId,
+  resolveWoiGameAccessContext,
   uniqueIds,
   type TeamMemberRow,
   type UserRow,
@@ -61,10 +61,7 @@ function mapUsers(users: UserRow[]): Map<string, UserRow> {
 }
 
 export async function GET(request: Request, context: RouteContext) {
-  const actor = requireActorId(request);
-  if ("response" in actor) {
-    return actor.response;
-  }
+  const accessContext = await resolveWoiGameAccessContext(request);
 
   const params = paramsSchema.safeParse(await context.params);
   if (!params.success) {
@@ -87,7 +84,7 @@ export async function GET(request: Request, context: RouteContext) {
     });
   }
 
-  const visibility = await canActorReadGame(gameResult.game, actor.actorId);
+  const visibility = await canAccessGame(gameResult.game, accessContext);
   if ("response" in visibility) {
     return visibility.response;
   }

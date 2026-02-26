@@ -65,7 +65,11 @@ export function QuipxDiscussPage({ sessionId }: { sessionId: string }) {
 
     const loadComments = async () => {
       try {
-        const data = await apiFetch<unknown>(`/api/comments?sessionId=${encodeURIComponent(sessionId)}`);
+        const params = new URLSearchParams({
+          contextType: "quipx_session",
+          contextId: sessionId,
+        });
+        const data = await apiFetch<unknown>(`/api/comments?${params.toString()}`);
         if (!active) {
           return;
         }
@@ -116,11 +120,19 @@ export function QuipxDiscussPage({ sessionId }: { sessionId: string }) {
     try {
       await apiFetch<unknown>("/api/comments", {
         method: "POST",
-        body: JSON.stringify({ sessionId, body: newComment.trim() }),
+        body: JSON.stringify({
+          contextType: "quipx_session",
+          contextId: sessionId,
+          body: newComment.trim(),
+        }),
       });
       setNewComment("");
 
-      const reloaded = await apiFetch<unknown>(`/api/comments?sessionId=${encodeURIComponent(sessionId)}`);
+      const params = new URLSearchParams({
+        contextType: "quipx_session",
+        contextId: sessionId,
+      });
+      const reloaded = await apiFetch<unknown>(`/api/comments?${params.toString()}`);
       const list = parseArray(parseObject(reloaded)?.comments ?? reloaded).map(parseComment);
       setComments(list);
       setCommentsError(null);

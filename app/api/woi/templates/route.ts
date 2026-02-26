@@ -15,7 +15,7 @@ type TemplateRow = {
 };
 
 export async function GET(request: Request) {
-  const actor = requireActorId(request);
+  const actor = await requireActorId(request);
   if ("response" in actor) {
     return actor.response;
   }

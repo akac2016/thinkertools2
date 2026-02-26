@@ -134,7 +134,7 @@ export async function GET(request: Request, context: RouteContext) {
 
 export async function POST(request: Request, context: RouteContext) {
   try {
-    const actor = requireDemoActorId(request);
+    const actor = await requireDemoActorId(request);
     if (!actor.ok) {
       return actor.response;
     }
