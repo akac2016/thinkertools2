@@ -6,7 +6,7 @@ import { parseBody } from "@/lib/api/route-utils";
 import { requireActorIdFromRequest } from "@/lib/auth/actor";
 import { jsonError, jsonSuccess } from "@/lib/http";
 import {
-  QUESTS_ACTIVE_ACTIVITY_CONTENT_TYPE,
+  TRAINING_ACTIVITY_CONTENT_TYPE,
   QUESTS_ACTIVE_SKILL_SLUG,
   RECOVERABLE_INVALID_INPUT_MESSAGE,
   applyEarnedXp,
@@ -20,7 +20,7 @@ import {
   isMatchingLabelPair,
   matchConstrainedTypedInput,
   normalizeLabelSelection,
-  type QuestsActivityRow,
+  type TrainingActivityRow,
 } from "@/lib/quests";
 import { getActiveSkillBySlug, getOrCreateUserSkillProgress } from "@/lib/quests/server-progress";
 import { supabaseAdmin } from "@/lib/supabase/admin";
@@ -59,11 +59,11 @@ export async function POST(request: Request) {
     }
 
     const activityResult = await supabaseAdmin
-      .from("quests_activities")
+      .from("training_activities")
       .select(ACTIVITY_SELECT)
       .eq("slug", parsedBody.data.activitySlug)
       .eq("primary_skill_id", skill.data.id)
-      .eq("content_type", QUESTS_ACTIVE_ACTIVITY_CONTENT_TYPE)
+      .eq("content_type", TRAINING_ACTIVITY_CONTENT_TYPE)
       .eq("is_active", true)
       .maybeSingle();
 
@@ -78,7 +78,7 @@ export async function POST(request: Request) {
       });
     }
 
-    const activityData = activityResult.data as Pick<QuestsActivityRow,
+    const activityData = activityResult.data as Pick<TrainingActivityRow,
       | "id"
       | "slug"
       | "title"
@@ -192,7 +192,7 @@ export async function POST(request: Request) {
 
     if (wasCorrect) {
       const reward = computeCompletionRewardXp({
-        contentType: "drill",
+        contentType: TRAINING_ACTIVITY_CONTENT_TYPE,
         baseXp: activityData.xp_reward,
         userLevel: progress.data.current_level,
         recommendedLevelMin: activityData.recommended_level_min,
@@ -244,12 +244,12 @@ export async function POST(request: Request) {
     };
 
     const completionResult = await supabaseAdmin
-      .from("quests_activity_completions")
+      .from("training_activity_attempts")
       .insert({
         user_id: actor.actorId,
         skill_id: skill.data.id,
-        activity_id: activityData.id,
-        content_type: QUESTS_ACTIVE_ACTIVITY_CONTENT_TYPE,
+        training_activity_id: activityData.id,
+        content_type: TRAINING_ACTIVITY_CONTENT_TYPE,
         was_successful: wasCorrect,
         awarded_xp: awardedXp,
         completion_metadata: completionMetadata,

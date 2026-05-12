@@ -1,6 +1,8 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+
+import { apiFetch, isApiRequestError } from "@/components/quipx/client";
 
 import styles from "./thinkertools-missions-chat.module.css";
 
@@ -9,6 +11,61 @@ type ChatMessage = {
   role: "assistant" | "user";
   name: string;
   body: string;
+};
+
+type ChatMode = "feed" | "quest" | "activity";
+type QuestStage = "none" | "intake";
+
+type RoundPromptClaim = {
+  label: string;
+  text: string;
+  displayText: string;
+};
+
+type ContradictionRound = {
+  id: string;
+  slug: string;
+  title: string;
+  shortDescription: string;
+  difficultyLabel: string;
+  xpReward: number;
+  recommendedLevelMin: number;
+  recommendedLevelMax: number;
+  roundType: string;
+  questionText: string;
+  promptClaims: RoundPromptClaim[];
+};
+
+type ProgressState = {
+  currentLevel: number;
+  currentLevelXp: number;
+  totalXp: number;
+  xpRequiredForNextLevel: number;
+  xpRemainingForNextLevel: number;
+};
+
+type LoadContradictionResponse = {
+  skill: {
+    id: string;
+    slug: string;
+    title: string;
+  };
+  progress: ProgressState;
+  rounds: ContradictionRound[];
+};
+
+type SubmitContradictionResponse = {
+  result: {
+    wasCorrect: boolean;
+    selectedLabels: string[];
+    correctAnswerLabels: string[];
+    explanation: string;
+    awardedXp: number;
+    xpMultiplier: 1 | 0.5 | 0;
+  };
+  progress: ProgressState & {
+    leveledUp: boolean;
+  };
 };
 
 type Mission = {
@@ -21,9 +78,12 @@ type Mission = {
 };
 
 type SkillActivity = {
+  id: string;
   level: number;
   name: string;
   xp: number;
+  status: "Unlocked" | "Locked";
+  requirements: string[];
 };
 
 type Skill = {
@@ -83,14 +143,35 @@ const missions: Mission[] = [
 
 const skills: Skill[] = [
   {
-    id: "contradiction-spotting",
-    name: "Contradiction Spotting",
+    id: "philosophical-thinking",
+    name: "Philosophical Thinking",
     level: 1,
     xp: 40,
     activities: [
-      { level: 1, name: "Choose the conflicting claim pair", xp: 20 },
-      { level: 2, name: "Explain why two claims cannot both hold", xp: 45 },
-      { level: 3, name: "Resolve a contradiction under missing context", xp: 80 },
+      {
+        id: "contradiction-spotting",
+        level: 1,
+        name: "Contradiction Spotting",
+        xp: 20,
+        status: "Unlocked",
+        requirements: ["Philosophical Thinking level 1"],
+      },
+      {
+        id: "explain-conflict",
+        level: 2,
+        name: "Explain why two claims cannot both hold",
+        xp: 45,
+        status: "Locked",
+        requirements: ["Reach Contradiction Spotting level 2"],
+      },
+      {
+        id: "missing-context",
+        level: 3,
+        name: "Resolve a contradiction under missing context",
+        xp: 80,
+        status: "Locked",
+        requirements: ["Reach Contradiction Spotting level 3"],
+      },
     ],
   },
   {
@@ -99,9 +180,30 @@ const skills: Skill[] = [
     level: 1,
     xp: 0,
     activities: [
-      { level: 1, name: "Identify an unstated assumption", xp: 25 },
-      { level: 2, name: "Rank premises by evidential strength", xp: 55 },
-      { level: 3, name: "Revise a weak argument without changing its conclusion", xp: 90 },
+      {
+        id: "unstated-assumption",
+        level: 1,
+        name: "Identify an unstated assumption",
+        xp: 25,
+        status: "Unlocked",
+        requirements: ["Premise Testing level 1"],
+      },
+      {
+        id: "rank-premises",
+        level: 2,
+        name: "Rank premises by evidential strength",
+        xp: 55,
+        status: "Locked",
+        requirements: ["Reach Premise Testing level 2"],
+      },
+      {
+        id: "revise-argument",
+        level: 3,
+        name: "Revise a weak argument without changing its conclusion",
+        xp: 90,
+        status: "Locked",
+        requirements: ["Reach Premise Testing level 3"],
+      },
     ],
   },
 ];
@@ -118,14 +220,37 @@ export function ThinkertoolsMissionsChat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [assistantQueue, setAssistantQueue] = useState<ChatMessage[]>(openingMessages);
   const [draft, setDraft] = useState("");
+  const [currentMode, setCurrentMode] = useState<ChatMode>("feed");
+  const [currentQuestStage, setCurrentQuestStage] = useState<QuestStage>("none");
+  const [currentChatScript, setCurrentChatScript] = useState("feed-intro");
   const [selectedMission, setSelectedMission] = useState<Mission | null>(null);
   const [selectedSkill, setSelectedSkill] = useState<Skill | null>(null);
+  const [selectedActivity, setSelectedActivity] = useState<SkillActivity | null>(null);
+  const [trainingLoading, setTrainingLoading] = useState(false);
+  const [trainingError, setTrainingError] = useState<string | null>(null);
+  const [trainingProgress, setTrainingProgress] = useState<ProgressState | null>(null);
+  const [contradictionRounds, setContradictionRounds] = useState<ContradictionRound[]>([]);
+  const [activeRoundSlug, setActiveRoundSlug] = useState("");
+  const [selectedLabels, setSelectedLabels] = useState<string[]>([]);
+  const [roundResult, setRoundResult] = useState<SubmitContradictionResponse["result"] | null>(null);
+  const [submittingTraining, setSubmittingTraining] = useState(false);
+  const messageIdCounter = useRef(0);
 
-  const canSend = draft.trim().length > 0;
+  const activeRound = useMemo(
+    () => contradictionRounds.find((round) => round.slug === activeRoundSlug) ?? null,
+    [activeRoundSlug, contradictionRounds],
+  );
+  const isTrainingRoundActive = currentMode === "activity" && Boolean(activeRound) && !roundResult;
+  const canSend = draft.trim().length > 0 || selectedLabels.length === 2;
   const messageCountLabel = useMemo(
     () => `${messages.length} message${messages.length === 1 ? "" : "s"}`,
     [messages.length],
   );
+
+  function getMessageId(prefix: string) {
+    messageIdCounter.current += 1;
+    return `${prefix}-${messageIdCounter.current}`;
+  }
 
   useEffect(() => {
     if (assistantQueue.length === 0) {
@@ -141,7 +266,7 @@ export function ThinkertoolsMissionsChat() {
     return () => window.clearTimeout(timer);
   }, [assistantQueue]);
 
-  function sendMessage(text: string) {
+  function appendUserMessage(text: string) {
     const cleanText = text.trim();
 
     if (!cleanText) {
@@ -151,16 +276,26 @@ export function ThinkertoolsMissionsChat() {
     setMessages((current) => [
       ...current,
       {
-        id: `u-${Date.now()}`,
+        id: getMessageId("u"),
         role: "user",
         name: "You",
         body: cleanText,
       },
     ]);
+  }
+
+  function sendMessage(text: string) {
+    const cleanText = text.trim();
+
+    if (!cleanText) {
+      return;
+    }
+
+    appendUserMessage(cleanText);
     setAssistantQueue((current) => [
       ...current,
       {
-        id: `a-${Date.now()}`,
+        id: getMessageId("a"),
         role: "assistant",
         name: "Mission Guide",
         body: "I have your response. The next version will connect this moment to mission state, scoring, and adaptive follow-up.",
@@ -169,8 +304,189 @@ export function ThinkertoolsMissionsChat() {
     setDraft("");
   }
 
+  function enqueueScriptMessages(scriptId: string, userAction: string, assistantBodies: string[]) {
+    setCurrentChatScript(scriptId);
+    setMessages((current) => [
+      ...current,
+      {
+        id: getMessageId(`u-${scriptId}`),
+        role: "user",
+        name: "You",
+        body: userAction,
+      },
+    ]);
+    setAssistantQueue((current) => [
+      ...current,
+      ...assistantBodies.map((body, index) => ({
+        id: getMessageId(`a-${scriptId}-${index}`),
+        role: "assistant" as const,
+        name: "Mission Guide",
+        body,
+      })),
+    ]);
+  }
+
+  function startQuest(mission: Mission) {
+    if (mission.status === "Locked") {
+      return;
+    }
+
+    setSelectedMission(mission);
+    setSelectedActivity(null);
+    setCurrentMode("quest");
+    setCurrentQuestStage("intake");
+    enqueueScriptMessages(`quest-${mission.id}-intake`, `Start quest: ${mission.title}`, [
+      `${mission.title} is now active.`,
+      "Stage 1: intake. The mission details panel will keep requirements and revealed facts visible while the chat handles decisions.",
+      "First task: review the revealed facts, then tell me which one feels least stable.",
+    ]);
+  }
+
+  async function startActivity(skill: Skill, activity: SkillActivity) {
+    if (activity.status === "Locked") {
+      return;
+    }
+
+    setSelectedSkill(skill);
+    setSelectedActivity(activity);
+    setCurrentMode("activity");
+    setCurrentQuestStage("none");
+    setTrainingLoading(true);
+    setTrainingError(null);
+    setRoundResult(null);
+    setSelectedLabels([]);
+    setDraft("");
+    appendUserMessage(`Start activity: ${activity.name}`);
+
+    try {
+      const response = await apiFetch<LoadContradictionResponse>(
+        "/api/thinkertools-missions/training/contradiction-spotting",
+      );
+      const firstRound = response.rounds[0] ?? null;
+
+      setTrainingProgress(response.progress);
+      setContradictionRounds(response.rounds);
+      setActiveRoundSlug(firstRound?.slug ?? "");
+      setCurrentChatScript(`activity-${activity.id}`);
+      setAssistantQueue((current) => [
+        ...current,
+        {
+          id: getMessageId(`a-activity-${activity.id}`),
+          role: "assistant",
+          name: "Mission Guide",
+          body: firstRound
+            ? `${firstRound.questionText} Select or type two labels.`
+            : "No Contradiction Spotting training content is available yet.",
+        },
+      ]);
+    } catch (loadError) {
+      const message = isApiRequestError(loadError)
+        ? loadError.message
+        : "Failed to load Contradiction Spotting.";
+      setTrainingError(message);
+      setAssistantQueue((current) => [
+        ...current,
+        {
+          id: getMessageId(`a-activity-${activity.id}-error`),
+          role: "assistant",
+          name: "Mission Guide",
+          body: message,
+        },
+      ]);
+    } finally {
+      setTrainingLoading(false);
+    }
+  }
+
+  function toggleClaimLabel(label: string) {
+    if (roundResult || submittingTraining) {
+      return;
+    }
+
+    setSelectedLabels((current) => {
+      if (current.includes(label)) {
+        return current.filter((item) => item !== label);
+      }
+
+      if (current.length < 2) {
+        return [...current, label];
+      }
+
+      return [current[1], label];
+    });
+  }
+
+  async function submitTrainingAnswer() {
+    if (!activeRound || submittingTraining) {
+      return;
+    }
+
+    const typedAnswer = draft.trim();
+    const submittedText = typedAnswer || selectedLabels.join(" + ");
+
+    if (!submittedText) {
+      setTrainingError("Select or type two labels.");
+      return;
+    }
+
+    appendUserMessage(submittedText);
+    setSubmittingTraining(true);
+    setTrainingError(null);
+
+    try {
+      const response = await apiFetch<SubmitContradictionResponse>(
+        "/api/thinkertools-missions/training/contradiction-spotting/submit",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            activitySlug: activeRound.slug,
+            selectedLabels,
+            typedAnswer,
+          }),
+        },
+      );
+
+      setRoundResult(response.result);
+      setTrainingProgress(response.progress);
+      setSelectedLabels(response.result.selectedLabels);
+      setDraft("");
+      setAssistantQueue((current) => [
+        ...current,
+        {
+          id: getMessageId("a-training-result"),
+          role: "assistant",
+          name: "Mission Guide",
+          body: response.result.wasCorrect
+            ? `Correct. ${response.result.explanation} +${response.result.awardedXp} XP.`
+            : `Not quite. The strongest pair is ${response.result.correctAnswerLabels.join(" + ")}. ${response.result.explanation}`,
+        },
+      ]);
+    } catch (submitError) {
+      const message = isApiRequestError(submitError)
+        ? submitError.message
+        : "Failed to submit answer.";
+      setTrainingError(message);
+      setAssistantQueue((current) => [
+        ...current,
+        {
+          id: getMessageId("a-training-submit-error"),
+          role: "assistant",
+          name: "Mission Guide",
+          body: message,
+        },
+      ]);
+    } finally {
+      setSubmittingTraining(false);
+    }
+  }
+
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (isTrainingRoundActive) {
+      void submitTrainingAnswer();
+      return;
+    }
+
     sendMessage(draft);
   }
 
@@ -201,7 +517,6 @@ export function ThinkertoolsMissionsChat() {
 
           <aside className={styles.skillsPanel} aria-label="Player skills">
             <div className={styles.panelHeading}>
-              <p className={styles.panelEyebrow}>Skills</p>
               <h2>Training</h2>
             </div>
             <div className={styles.skillList}>
@@ -209,7 +524,10 @@ export function ThinkertoolsMissionsChat() {
                 <button
                   className={styles.skillItem}
                   key={skill.id}
-                  onClick={() => setSelectedSkill(skill)}
+                  onClick={() => {
+                    setSelectedSkill(skill);
+                    setSelectedActivity(null);
+                  }}
                   type="button"
                 >
                   <strong>{skill.name}</strong>
@@ -218,6 +536,54 @@ export function ThinkertoolsMissionsChat() {
                 </button>
               ))}
             </div>
+          </aside>
+
+          <aside className={styles.skillDetailsPanel} aria-label="Skill details">
+            {selectedSkill ? (
+              <>
+                <div className={styles.panelHeading}>
+                  <h2>{selectedSkill.name}</h2>
+                </div>
+                <div className={styles.activityList}>
+                  {selectedSkill.activities.map((activity) => (
+                    <div
+                      className={`${styles.activityItem} ${
+                        selectedActivity?.id === activity.id ? styles.selectedActivityItem : ""
+                      }`}
+                      key={activity.id}
+                    >
+                      <span>Level {activity.level}</span>
+                      <strong>{activity.name}</strong>
+                      <span>
+                        {activity.xp} XP / {activity.status}
+                      </span>
+                      {activity.status === "Unlocked" ? (
+                        <button
+                          className={styles.panelActionButton}
+                          onClick={() => {
+                            void startActivity(selectedSkill, activity);
+                          }}
+                          type="button"
+                        >
+                          {trainingLoading && selectedActivity?.id === activity.id ? "Loading..." : "Start Activity"}
+                        </button>
+                      ) : (
+                        <div className={styles.lockedRequirements}>
+                          <span>Requirements</span>
+                          <ul>
+                            {activity.requirements.map((requirement) => (
+                              <li key={requirement}>{requirement}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <p className={styles.emptyDetails}>Click on a skill to open activities</p>
+            )}
           </aside>
         </div>
 
@@ -228,7 +594,9 @@ export function ThinkertoolsMissionsChat() {
               <h1>Mission Chat</h1>
             </div>
             <div className={styles.sessionMeta}>
-              <span>Prototype</span>
+              <span>{currentMode}</span>
+              <span>{currentChatScript}</span>
+              {currentQuestStage !== "none" ? <span>{currentQuestStage}</span> : null}
               <span>{messageCountLabel}</span>
             </div>
           </header>
@@ -250,6 +618,53 @@ export function ThinkertoolsMissionsChat() {
                 </div>
               </article>
             ))}
+
+            {activeRound ? (
+              <section className={styles.trainingRound} aria-label="Active training question">
+                <div className={styles.trainingRoundHeader}>
+                  <span>{activeRound.difficultyLabel}</span>
+                  <strong>{activeRound.title}</strong>
+                  <span>{activeRound.xpReward} XP</span>
+                </div>
+                <p className={styles.trainingQuestion}>{activeRound.questionText}</p>
+                <div className={styles.claimList}>
+                  {activeRound.promptClaims.map((claim) => {
+                    const isSelected = selectedLabels.includes(claim.label);
+                    const isCorrect = roundResult?.correctAnswerLabels.includes(claim.label) ?? false;
+                    return (
+                      <button
+                        className={`${styles.claimButton} ${
+                          isSelected ? styles.selectedClaimButton : ""
+                        } ${roundResult && isCorrect ? styles.correctClaimButton : ""}`}
+                        disabled={Boolean(roundResult) || submittingTraining}
+                        key={claim.label}
+                        onClick={() => toggleClaimLabel(claim.label)}
+                        type="button"
+                      >
+                        <span>{claim.label}</span>
+                        <strong>{claim.text}</strong>
+                      </button>
+                    );
+                  })}
+                </div>
+                {trainingError ? <p className={styles.trainingError}>{trainingError}</p> : null}
+                {roundResult ? (
+                  <div className={styles.trainingFeedback}>
+                    <strong>{roundResult.wasCorrect ? "Correct" : "Review"}</strong>
+                    <p>{roundResult.explanation}</p>
+                    <span>
+                      Selected {roundResult.selectedLabels.join(" + ")} / Correct{" "}
+                      {roundResult.correctAnswerLabels.join(" + ")} / +{roundResult.awardedXp} XP
+                    </span>
+                  </div>
+                ) : null}
+                {trainingProgress ? (
+                  <div className={styles.trainingProgress}>
+                    Level {trainingProgress.currentLevel} / {trainingProgress.totalXp} XP total
+                  </div>
+                ) : null}
+              </section>
+            ) : null}
           </div>
 
           <div className={styles.suggestionBar} aria-label="Suggested replies">
@@ -272,129 +687,76 @@ export function ThinkertoolsMissionsChat() {
               value={draft}
             />
             <button disabled={!canSend} type="submit">
-              Send
+              {submittingTraining ? "Submitting..." : isTrainingRoundActive ? "Submit" : "Send"}
             </button>
           </form>
         </section>
 
-        <aside className={styles.missionPanel} aria-label="Missions and quests">
-          <div className={styles.panelHeading}>
-            <p className={styles.panelEyebrow}>Mission</p>
-            <h2>Quests</h2>
-          </div>
-          <div className={styles.missionList}>
-            {missions.map((mission) => (
-              <button
-                className={styles.missionItem}
-                key={mission.id}
-                onClick={() => setSelectedMission(mission)}
-                type="button"
-              >
-                <span className={styles.missionType}>{mission.type}</span>
-                <strong>{mission.title}</strong>
-                <span className={styles.missionStatus}>{mission.status}</span>
-              </button>
-            ))}
-          </div>
-        </aside>
+        <div className={styles.rightRail}>
+          <aside className={styles.missionPanel} aria-label="Missions and quests">
+            <div className={styles.panelHeading}>
+              <h2>Missions</h2>
+            </div>
+            <div className={styles.missionList}>
+              {missions.map((mission) => (
+                <button
+                  className={`${styles.missionItem} ${
+                    selectedMission?.id === mission.id ? styles.selectedMissionItem : ""
+                  }`}
+                  key={mission.id}
+                  onClick={() => setSelectedMission(mission)}
+                  type="button"
+                >
+                  <span className={styles.missionType}>{mission.type}</span>
+                  <strong>{mission.title}</strong>
+                  <span className={styles.missionStatus}>{mission.status}</span>
+                </button>
+              ))}
+            </div>
+          </aside>
+
+          <aside className={styles.missionDetailsPanel} aria-label="Mission details">
+            {selectedMission ? (
+              <>
+                <div className={styles.panelHeading}>
+                  <span className={styles.missionType}>{selectedMission.type}</span>
+                  <h2>{selectedMission.title}</h2>
+                </div>
+
+                <section className={styles.requirementsBlock}>
+                  <h3>Start Requirements</h3>
+                  <ul>
+                    {selectedMission.requirements.map((requirement) => (
+                      <li key={requirement}>{requirement}</li>
+                    ))}
+                  </ul>
+                </section>
+
+                <section className={styles.factsBlock}>
+                  <h3>Revealed Facts</h3>
+                  <ul>
+                    {selectedMission.revealedFacts.map((fact) => (
+                      <li key={fact}>{fact}</li>
+                    ))}
+                  </ul>
+                </section>
+
+                {selectedMission.status === "Available" ? (
+                  <button
+                    className={styles.panelActionButton}
+                    onClick={() => startQuest(selectedMission)}
+                    type="button"
+                  >
+                    Start Quest
+                  </button>
+                ) : null}
+              </>
+            ) : (
+              <p className={styles.emptyDetails}>Click on a quest to open details</p>
+            )}
+          </aside>
+        </div>
       </div>
-
-      {selectedMission ? (
-        <div
-          className={styles.modalBackdrop}
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
-              setSelectedMission(null);
-            }
-          }}
-        >
-          <section
-            aria-labelledby="mission-dialog-title"
-            aria-modal="true"
-            className={styles.missionDialog}
-            role="dialog"
-          >
-            <header className={styles.dialogHeader}>
-              <div>
-                <p className={styles.panelEyebrow}>{selectedMission.type}</p>
-                <h2 id="mission-dialog-title">{selectedMission.title}</h2>
-              </div>
-              <button
-                aria-label="Close mission details"
-                className={styles.closeButton}
-                onClick={() => setSelectedMission(null)}
-                type="button"
-              >
-                x
-              </button>
-            </header>
-
-            <section className={styles.requirementsBlock}>
-              <h3>Start Requirements</h3>
-              <ul>
-                {selectedMission.requirements.map((requirement) => (
-                  <li key={requirement}>{requirement}</li>
-                ))}
-              </ul>
-            </section>
-
-            <section className={styles.factsBlock}>
-              <h3>Revealed Facts</h3>
-              <ul>
-                {selectedMission.revealedFacts.map((fact) => (
-                  <li key={fact}>{fact}</li>
-                ))}
-              </ul>
-            </section>
-          </section>
-        </div>
-      ) : null}
-
-      {selectedSkill ? (
-        <div
-          className={styles.modalBackdrop}
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
-              setSelectedSkill(null);
-            }
-          }}
-        >
-          <section
-            aria-labelledby="skill-dialog-title"
-            aria-modal="true"
-            className={styles.missionDialog}
-            role="dialog"
-          >
-            <header className={styles.dialogHeader}>
-              <div>
-                <p className={styles.panelEyebrow}>Skill</p>
-                <h2 id="skill-dialog-title">{selectedSkill.name}</h2>
-              </div>
-              <button
-                aria-label="Close skill details"
-                className={styles.closeButton}
-                onClick={() => setSelectedSkill(null)}
-                type="button"
-              >
-                x
-              </button>
-            </header>
-
-            <section className={styles.factsBlock}>
-              <h3>Training Activities</h3>
-              <div className={styles.activityList}>
-                {selectedSkill.activities.map((activity) => (
-                  <div className={styles.activityItem} key={`${activity.level}-${activity.name}`}>
-                    <span>Level {activity.level}</span>
-                    <strong>{activity.name}</strong>
-                    <span>{activity.xp} XP</span>
-                  </div>
-                ))}
-              </div>
-            </section>
-          </section>
-        </div>
-      ) : null}
     </main>
   );
 }

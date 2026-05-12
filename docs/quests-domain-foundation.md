@@ -21,29 +21,29 @@ Explicitly not included:
 - AI tooling, creator tooling, or community systems
 
 ## Data model
-Database objects are namespaced with the `quests_` prefix to avoid confusion with legacy systems.
+Quest objects keep the `quests_` prefix; reusable training tables use the `training_` prefix.
 
 Tables:
 - `quests_skills`
-- `quests_activities`
+- `training_activities`
 - `quests_quests`
 - `quests_user_skill_progress`
-- `quests_activity_completions`
+- `training_activity_attempts`
 - `quests_quest_completions`
 
 Notes:
 - `quests_skills` seeds `philosophical-reasoning` as the only active path for this slice.
-- `quests_activities.content_type` is locked to `drill`.
+- `training_activities.content_type` is locked to `practice`.
 - `quests_quests.content_type` is locked to `quest`.
 - Level cap is encoded at schema and utility levels as 20.
 - `quests_quest_completions` enforces one completion record per user/quest in this slice.
 
 Files:
 - `supabase/migrations/20260412163000_quests_domain_foundation.sql`
-- `supabase/migrations/20260412170500_quests_activities_round_content.sql`
+- `supabase/migrations/20260412170500_training_activities_round_content.sql`
 
 ## Authored round payload (`round_content`)
-`quests_activities.round_content` is a JSON payload for authored drill-round content.
+`training_activities.round_content` is a JSON payload for authored training activity content.
 
 Intended Contradiction Spotting shape:
 
@@ -63,7 +63,7 @@ Intended Contradiction Spotting shape:
 Example row usage:
 
 ```sql
-insert into public.quests_activities (
+insert into public.training_activities (
   slug,
   title,
   primary_skill_id,
@@ -82,7 +82,7 @@ values (
   'philo-contradiction-direct-001',
   'Contradiction Spotting: Direct Claims 1',
   '<philosophical-reasoning-skill-uuid>',
-  'drill',
+  'practice',
   'contradiction-spotting',
   'Identify the strongest contradiction between labeled claims.',
   'intro',
@@ -115,7 +115,7 @@ Files:
 
 ## Progression assumptions
 - Locked XP table is implemented for level transitions 1→20.
-- Overlevel decay is implemented for repeatable activities (drills):
+- Overlevel decay is implemented for repeatable activities (practices):
   - full XP at or below recommended max level
   - 50% XP for the next 2 levels
   - 0 XP after that
@@ -132,12 +132,12 @@ Files:
 - Invalid typed input returns `invalid_input` with a recoverable prompt message and is not auto-graded as philosophically wrong.
 
 ## What later threads can build on
-- Contradiction Spotting can reuse `quests_activities` + `quests_activity_completions` + matcher.
+- Contradiction Spotting can reuse `training_activities` + `training_activity_attempts` + matcher.
 - The Wrong Recruit can reuse `quests_quests` + `quests_quest_completions` + matcher.
-- Shared XP and level logic can be reused by both drills and quest completion handling.
+- Shared XP and level logic can be reused by both practices and quest completion handling.
 
 ## Real blockers / ambiguities found
 No true blockers for this task.
 
 Non-blocking ambiguity resolved for this slice:
-- Source docs mention a broader spectrum including `challenge`, but this task explicitly constrained active content types to `drill` and `quest`. The schema and domain code follow this task constraint.
+- Source docs mention a broader spectrum including `challenge`, but this task explicitly constrained active content types to `practice` and `quest`. The schema and domain code follow this task constraint.

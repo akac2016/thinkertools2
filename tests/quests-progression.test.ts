@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  TRAINING_ACTIVITY_CONTENT_TYPE,
   XP_REQUIRED_BY_LEVEL,
   applyEarnedXp,
   computeCompletionRewardXp,
   getXpRequiredForNextLevel,
-} from "../lib/quests/progression.ts";
+} from "../lib/quests/index.ts";
 
 test("XP table matches locked values", () => {
   assert.deepEqual(XP_REQUIRED_BY_LEVEL, {
@@ -35,10 +36,10 @@ test("XP table matches locked values", () => {
   assert.equal(getXpRequiredForNextLevel(20), 0);
 });
 
-test("drill completion gives full, then 50%, then zero XP when overleveled", () => {
+test("practice completion gives full, then 50%, then zero XP when overleveled", () => {
   assert.deepEqual(
     computeCompletionRewardXp({
-      contentType: "drill",
+      contentType: TRAINING_ACTIVITY_CONTENT_TYPE,
       baseXp: 10,
       userLevel: 3,
       recommendedLevelMin: 1,
@@ -49,7 +50,7 @@ test("drill completion gives full, then 50%, then zero XP when overleveled", () 
 
   assert.deepEqual(
     computeCompletionRewardXp({
-      contentType: "drill",
+      contentType: TRAINING_ACTIVITY_CONTENT_TYPE,
       baseXp: 10,
       userLevel: 4,
       recommendedLevelMin: 1,
@@ -60,7 +61,7 @@ test("drill completion gives full, then 50%, then zero XP when overleveled", () 
 
   assert.deepEqual(
     computeCompletionRewardXp({
-      contentType: "drill",
+      contentType: TRAINING_ACTIVITY_CONTENT_TYPE,
       baseXp: 10,
       userLevel: 5,
       recommendedLevelMin: 1,
@@ -71,7 +72,7 @@ test("drill completion gives full, then 50%, then zero XP when overleveled", () 
 
   assert.deepEqual(
     computeCompletionRewardXp({
-      contentType: "drill",
+      contentType: TRAINING_ACTIVITY_CONTENT_TYPE,
       baseXp: 10,
       userLevel: 6,
       recommendedLevelMin: 1,

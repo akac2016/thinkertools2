@@ -1,4 +1,4 @@
-import type { QuestsActivityRoundContent } from "./domain-types.ts";
+import type { TrainingActivityRoundContent } from "./domain-types.ts";
 
 const DEFAULT_QUESTION_TEXT = "Which two claims are in strongest contradiction?";
 const DEFAULT_EXPLANATION = "Review the claims and compare the strongest conflict.";
@@ -9,7 +9,7 @@ export type ContradictionPromptClaim = {
   displayText: string;
 };
 
-export function extractPromptClaims(roundContent: QuestsActivityRoundContent): ContradictionPromptClaim[] {
+export function extractPromptClaims(roundContent: TrainingActivityRoundContent): ContradictionPromptClaim[] {
   const rawClaims = Array.isArray(roundContent.prompt_claims)
     ? roundContent.prompt_claims
     : [];
@@ -34,7 +34,7 @@ export function extractPromptClaims(roundContent: QuestsActivityRoundContent): C
   return parsedClaims;
 }
 
-export function extractQuestionText(roundContent: QuestsActivityRoundContent): string {
+export function extractQuestionText(roundContent: TrainingActivityRoundContent): string {
   const question = typeof roundContent.question_text === "string"
     ? roundContent.question_text.trim()
     : "";
@@ -42,7 +42,7 @@ export function extractQuestionText(roundContent: QuestsActivityRoundContent): s
   return question || DEFAULT_QUESTION_TEXT;
 }
 
-export function extractExplanation(roundContent: QuestsActivityRoundContent): string {
+export function extractExplanation(roundContent: TrainingActivityRoundContent): string {
   const explanation = typeof roundContent.explanation === "string"
     ? roundContent.explanation.trim()
     : "";
@@ -50,15 +50,15 @@ export function extractExplanation(roundContent: QuestsActivityRoundContent): st
   return explanation || DEFAULT_EXPLANATION;
 }
 
-export function extractRoundTypeTag(roundContent: QuestsActivityRoundContent): string {
+export function extractRoundTypeTag(roundContent: TrainingActivityRoundContent): string {
   const roundType = typeof roundContent.round_type === "string"
     ? roundContent.round_type.trim()
     : "";
 
-  return roundType || "drill_standard";
+  return roundType || "practice_standard";
 }
 
-export function extractCorrectAnswerLabels(roundContent: QuestsActivityRoundContent): string[] {
+export function extractCorrectAnswerLabels(roundContent: TrainingActivityRoundContent): string[] {
   const rawLabels = Array.isArray(roundContent.correct_answer_labels)
     ? roundContent.correct_answer_labels
     : [];

@@ -16,12 +16,12 @@ create table if not exists public.quests_skills (
   updated_at timestamptz not null default now()
 );
 
-create table if not exists public.quests_activities (
+create table if not exists public.training_activities (
   id uuid primary key default gen_random_uuid(),
   slug text not null unique,
   title text not null,
   primary_skill_id uuid not null references public.quests_skills(id) on delete restrict,
-  content_type text not null default 'drill' check (content_type = 'drill'),
+  content_type text not null default 'practice' check (content_type = 'practice'),
   template_family text not null,
   short_description text not null default '',
   difficulty_label text not null default 'intro',
@@ -37,8 +37,8 @@ create table if not exists public.quests_activities (
   check (recommended_level_min <= recommended_level_max)
 );
 
-create index if not exists idx_quests_activities_skill_level
-  on public.quests_activities(primary_skill_id, recommended_level_min, recommended_level_max);
+create index if not exists idx_training_activities_skill_level
+  on public.training_activities(primary_skill_id, recommended_level_min, recommended_level_max);
 
 create table if not exists public.quests_quests (
   id uuid primary key default gen_random_uuid(),
@@ -51,7 +51,7 @@ create table if not exists public.quests_quests (
   short_description text not null default '',
   difficulty_label text not null default 'intro',
   required_skill_level integer not null default 1 check (required_skill_level >= 1 and required_skill_level <= 20),
-  prerequisite_activity_ids uuid[] not null default '{}',
+  prerequisite_training_activity_ids uuid[] not null default '{}',
   prerequisite_quest_ids uuid[] not null default '{}',
   completion_criteria text not null default '',
   xp_reward integer not null check (xp_reward >= 0),
@@ -79,20 +79,20 @@ create table if not exists public.quests_user_skill_progress (
 create index if not exists idx_quests_user_skill_progress_user
   on public.quests_user_skill_progress(user_id);
 
-create table if not exists public.quests_activity_completions (
+create table if not exists public.training_activity_attempts (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.users(id) on delete cascade,
   skill_id uuid not null references public.quests_skills(id) on delete restrict,
-  activity_id uuid not null references public.quests_activities(id) on delete restrict,
-  content_type text not null default 'drill' check (content_type = 'drill'),
+  training_activity_id uuid not null references public.training_activities(id) on delete restrict,
+  content_type text not null default 'practice' check (content_type = 'practice'),
   was_successful boolean not null default true,
   awarded_xp integer not null default 0 check (awarded_xp >= 0),
   completion_metadata jsonb not null default '{}'::jsonb,
   completed_at timestamptz not null default now()
 );
 
-create index if not exists idx_quests_activity_completions_user_completed
-  on public.quests_activity_completions(user_id, completed_at desc);
+create index if not exists idx_training_activity_attempts_user_completed
+  on public.training_activity_attempts(user_id, completed_at desc);
 
 create table if not exists public.quests_quest_completions (
   id uuid primary key default gen_random_uuid(),

@@ -4,13 +4,13 @@ import { jsonError, jsonSuccess } from "@/lib/http";
 import { requireActorIdFromRequest } from "@/lib/auth/actor";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import {
-  QUESTS_ACTIVE_ACTIVITY_CONTENT_TYPE,
+  TRAINING_ACTIVITY_CONTENT_TYPE,
   QUESTS_ACTIVE_SKILL_SLUG,
   extractPromptClaims,
   extractQuestionText,
   extractRoundTypeTag,
   getXpRequiredForNextLevel,
-  type QuestsActivityRow,
+  type TrainingActivityRow,
   type QuestsSkillRow,
 } from "@/lib/quests";
 import { getActiveSkillBySlug, getOrCreateUserSkillProgress } from "@/lib/quests/server-progress";
@@ -66,15 +66,15 @@ export async function GET(request: Request) {
     }
 
     const activitiesResult = await supabaseAdmin
-      .from("quests_activities")
+      .from("training_activities")
       .select(ACTIVITY_SELECT)
       .eq("primary_skill_id", skill.data.id)
-      .eq("content_type", QUESTS_ACTIVE_ACTIVITY_CONTENT_TYPE)
+      .eq("content_type", TRAINING_ACTIVITY_CONTENT_TYPE)
       .eq("is_active", true)
       .order("recommended_level_min", { ascending: true })
       .order("recommended_level_max", { ascending: true })
       .order("slug", { ascending: true })
-      .returns<Pick<QuestsActivityRow,
+      .returns<Pick<TrainingActivityRow,
         | "id"
         | "slug"
         | "title"

@@ -2,10 +2,10 @@ export const QUESTS_MAX_LEVEL = 20 as const;
 
 export const QUESTS_ACTIVE_SKILL_SLUG = "philosophical-reasoning" as const;
 
-export const QUESTS_ACTIVE_ACTIVITY_CONTENT_TYPE = "drill" as const;
+export const TRAINING_ACTIVITY_CONTENT_TYPE = "practice" as const;
 export const QUESTS_ACTIVE_QUEST_CONTENT_TYPE = "quest" as const;
 
-export type QuestsActivityContentType = typeof QUESTS_ACTIVE_ACTIVITY_CONTENT_TYPE;
+export type TrainingActivityContentType = typeof TRAINING_ACTIVITY_CONTENT_TYPE;
 export type QuestsQuestContentType = typeof QUESTS_ACTIVE_QUEST_CONTENT_TYPE;
 
 export type QuestsContradictionSpottingRoundContent = {
@@ -16,7 +16,7 @@ export type QuestsContradictionSpottingRoundContent = {
   round_type: string;
 };
 
-export type QuestsActivityRoundContent =
+export type TrainingActivityRoundContent =
   Partial<QuestsContradictionSpottingRoundContent>
   & Record<string, unknown>;
 
@@ -31,12 +31,12 @@ export type QuestsSkillRow = {
   updated_at: string;
 };
 
-export type QuestsActivityRow = {
+export type TrainingActivityRow = {
   id: string;
   slug: string;
   title: string;
   primary_skill_id: string;
-  content_type: QuestsActivityContentType;
+  content_type: TrainingActivityContentType;
   template_family: string;
   short_description: string;
   difficulty_label: string;
@@ -45,7 +45,7 @@ export type QuestsActivityRow = {
   recommended_level_min: number;
   recommended_level_max: number;
   overlevel_grace_levels: number;
-  round_content: QuestsActivityRoundContent;
+  round_content: TrainingActivityRoundContent;
   repeatable: boolean;
   is_active: boolean;
   created_at: string;
@@ -63,7 +63,7 @@ export type QuestsQuestRow = {
   short_description: string;
   difficulty_label: string;
   required_skill_level: number;
-  prerequisite_activity_ids: string[];
+  prerequisite_training_activity_ids: string[];
   prerequisite_quest_ids: string[];
   completion_criteria: string;
   xp_reward: number;
@@ -84,12 +84,12 @@ export type QuestsUserSkillProgressRow = {
   updated_at: string;
 };
 
-export type QuestsActivityCompletionRow = {
+export type TrainingActivityAttemptRow = {
   id: string;
   user_id: string;
   skill_id: string;
-  activity_id: string;
-  content_type: QuestsActivityContentType;
+  training_activity_id: string;
+  content_type: TrainingActivityContentType;
   was_successful: boolean;
   awarded_xp: number;
   completion_metadata: Record<string, unknown>;
@@ -114,5 +114,5 @@ export type QuestsSkillProgress = {
 };
 
 export type QuestsCompletionContentType =
-  | QuestsActivityContentType
+  | TrainingActivityContentType
   | QuestsQuestContentType;

@@ -120,16 +120,19 @@ function TypedMessage({
   }, [onComplete]);
 
   useEffect(() => {
-    if (!enabled) {
-      setVisibleCount(0);
-      return;
-    }
+    let timerId: ReturnType<typeof setTimeout> | null = null;
 
-    setVisibleCount(0);
+    if (!enabled) {
+      timerId = setTimeout(() => setVisibleCount(0), 0);
+      return () => {
+        if (timerId) {
+          clearTimeout(timerId);
+        }
+      };
+    }
 
     let cancelled = false;
     let completed = false;
-    let timerId: ReturnType<typeof setTimeout> | null = null;
 
     const tick = (currentCount: number) => {
       if (cancelled) {
@@ -147,7 +150,10 @@ function TypedMessage({
       }
     };
 
-    tick(0);
+    timerId = setTimeout(() => {
+      setVisibleCount(0);
+      tick(0);
+    }, 0);
 
     return () => {
       cancelled = true;
