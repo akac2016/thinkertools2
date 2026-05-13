@@ -81,6 +81,7 @@ const PLANNED_SKILL_TITLES = [
   "Historical Reasoning",
   "Economic Reasoning",
 ] as const;
+const CONTRADICTION_SPOTTING_DISPLAY_TITLE = "Contradiction Spotting" as const;
 
 function formatDifficulty(label: string): string {
   if (!label.trim()) {
@@ -993,7 +994,7 @@ export function ContradictionSpottingDrillClient() {
                       {canShowRoundQuestion ? (
                         <ChatRow tone="system" speaker="System" side="left">
                           <TypedMessage
-                            text={`${activeRound.title}: ${activeRound.questionText}`}
+                            text={`${CONTRADICTION_SPOTTING_DISPLAY_TITLE}: ${activeRound.questionText}`}
                             runKey={`${animationRoundKey}-question`}
                             enabled
                             speedMs={11}

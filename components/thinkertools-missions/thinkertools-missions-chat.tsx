@@ -11,6 +11,8 @@ type ChatMessage = {
   role: "assistant" | "user";
   name: string;
   body: string;
+  trainingRound?: TrainingRoundTranscript;
+  questionBank?: boolean;
 };
 
 type ChatMode = "feed" | "quest" | "activity";
@@ -68,6 +70,14 @@ type SubmitContradictionResponse = {
   };
 };
 
+type TrainingRoundTranscript = {
+  interactionId: string;
+  round: ContradictionRound;
+  selectedLabels: string[];
+  incorrectAttempts: number;
+  result: SubmitContradictionResponse["result"] | null;
+};
+
 type Mission = {
   id: string;
   title: string;
@@ -109,11 +119,9 @@ const openingMessages: ChatMessage[] = [
   },
 ];
 
-const suggestedReplies = [
-  "Start a reasoning mission",
-  "Show me the mission context",
-  "Give me a small challenge",
-];
+const CONTRADICTION_SPOTTING_SKILL_ID = "philosophical-thinking" as const;
+const AVAILABLE_ACTIVITY_IDS = new Set(["contradiction-spotting"]);
+const CONTRADICTION_SPOTTING_DISPLAY_TITLE = "Contradiction Spotting" as const;
 
 const missions: Mission[] = [
   {
@@ -228,11 +236,14 @@ export function ThinkertoolsMissionsChat() {
   const [selectedActivity, setSelectedActivity] = useState<SkillActivity | null>(null);
   const [trainingLoading, setTrainingLoading] = useState(false);
   const [trainingError, setTrainingError] = useState<string | null>(null);
+  const [initialTrainingProgressLoaded, setInitialTrainingProgressLoaded] = useState(false);
   const [trainingProgress, setTrainingProgress] = useState<ProgressState | null>(null);
   const [contradictionRounds, setContradictionRounds] = useState<ContradictionRound[]>([]);
   const [activeRoundSlug, setActiveRoundSlug] = useState("");
+  const [activeTrainingInteractionId, setActiveTrainingInteractionId] = useState<string | null>(null);
   const [selectedLabels, setSelectedLabels] = useState<string[]>([]);
   const [roundResult, setRoundResult] = useState<SubmitContradictionResponse["result"] | null>(null);
+  const [completedRoundSlugs, setCompletedRoundSlugs] = useState<Set<string>>(() => new Set());
   const [submittingTraining, setSubmittingTraining] = useState(false);
   const messageIdCounter = useRef(0);
 
@@ -240,8 +251,19 @@ export function ThinkertoolsMissionsChat() {
     () => contradictionRounds.find((round) => round.slug === activeRoundSlug) ?? null,
     [activeRoundSlug, contradictionRounds],
   );
+  const activeRoundIndex = useMemo(
+    () => contradictionRounds.findIndex((round) => round.slug === activeRoundSlug),
+    [activeRoundSlug, contradictionRounds],
+  );
+  const activeRoundNumber = activeRoundIndex >= 0 ? activeRoundIndex + 1 : 0;
   const isTrainingRoundActive = currentMode === "activity" && Boolean(activeRound) && !roundResult;
-  const canSend = draft.trim().length > 0 || selectedLabels.length === 2;
+  const shouldShowQuestionBankButton = currentMode === "activity"
+    && Boolean(activeRound)
+    && contradictionRounds.length > 0;
+  const activeTrainingSkillId = selectedActivity ? selectedSkill?.id ?? null : null;
+  const canSend = isTrainingRoundActive
+    ? draft.trim().length > 0 || selectedLabels.length === 2
+    : draft.trim().length > 0;
   const messageCountLabel = useMemo(
     () => `${messages.length} message${messages.length === 1 ? "" : "s"}`,
     [messages.length],
@@ -251,6 +273,125 @@ export function ThinkertoolsMissionsChat() {
     messageIdCounter.current += 1;
     return `${prefix}-${messageIdCounter.current}`;
   }
+
+  function getSkillProgressDisplay(skill: Skill) {
+    if (skill.id === CONTRADICTION_SPOTTING_SKILL_ID) {
+      if (!initialTrainingProgressLoaded) {
+        return {
+          level: null,
+          xp: null,
+          levelXp: null,
+          xpRequiredForNextLevel: null,
+          status: "loading" as const,
+        };
+      }
+
+      if (!trainingProgress) {
+        return {
+          level: null,
+          xp: null,
+          levelXp: null,
+          xpRequiredForNextLevel: null,
+          status: "unavailable" as const,
+        };
+      }
+
+      return {
+        level: trainingProgress.currentLevel,
+        xp: trainingProgress.totalXp,
+        levelXp: trainingProgress.currentLevelXp,
+        xpRequiredForNextLevel: trainingProgress.xpRequiredForNextLevel,
+        status: activeTrainingSkillId === skill.id ? "active" as const : "loaded" as const,
+      };
+    }
+
+    return {
+      level: skill.level,
+      xp: skill.xp,
+      levelXp: null,
+      xpRequiredForNextLevel: null,
+      status: "static" as const,
+    };
+  }
+
+  function getSkillLevel(skill: Skill) {
+    if (
+      skill.id === CONTRADICTION_SPOTTING_SKILL_ID
+      && initialTrainingProgressLoaded
+      && trainingProgress
+    ) {
+      return trainingProgress.currentLevel;
+    }
+
+    return skill.level;
+  }
+
+  function isActivityUnlocked(skill: Skill, activity: SkillActivity) {
+    if (activity.status === "Unlocked") {
+      return true;
+    }
+
+    return getSkillLevel(skill) >= activity.level;
+  }
+
+  function getActivityStatusLabel(skill: Skill, activity: SkillActivity) {
+    if (isActivityUnlocked(skill, activity) && !AVAILABLE_ACTIVITY_IDS.has(activity.id)) {
+      return "Coming soon";
+    }
+
+    return isActivityUnlocked(skill, activity) ? "Unlocked" : "Locked";
+  }
+
+  function getActivityRequirements(skill: Skill, activity: SkillActivity) {
+    if (skill.id === CONTRADICTION_SPOTTING_SKILL_ID) {
+      return [`Reach Philosophical Thinking level ${activity.level}`];
+    }
+
+    return activity.requirements;
+  }
+
+  function getUnavailableActivityMessage(activity: SkillActivity) {
+    if (AVAILABLE_ACTIVITY_IDS.has(activity.id)) {
+      return null;
+    }
+
+    return "Training content for this activity has not been added yet.";
+  }
+
+  useEffect(() => {
+    let mounted = true;
+
+    const loadInitialTrainingProgress = async () => {
+      try {
+        const response = await apiFetch<LoadContradictionResponse>(
+          "/api/thinkertools-missions/training/contradiction-spotting",
+        );
+
+        if (!mounted) {
+          return;
+        }
+
+        setTrainingProgress(response.progress);
+        setContradictionRounds(response.rounds);
+      } catch {
+        if (!mounted) {
+          return;
+        }
+
+        setTrainingProgress(null);
+      } finally {
+        if (mounted) {
+          setInitialTrainingProgressLoaded(true);
+        }
+      }
+    };
+
+    void loadInitialTrainingProgress();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (assistantQueue.length === 0) {
@@ -326,6 +467,80 @@ export function ThinkertoolsMissionsChat() {
     ]);
   }
 
+  function showQuestionBankStatus() {
+    if (!activeRound || activeRoundNumber <= 0 || contradictionRounds.length === 0) {
+      return;
+    }
+
+    setMessages((current) => [
+      ...current,
+      {
+        id: getMessageId("u-activity-question-bank"),
+        role: "user",
+        name: "You",
+        body: `Question Bank (${activeRoundNumber}/${contradictionRounds.length})`,
+      },
+      {
+        id: getMessageId("a-activity-question-bank"),
+        role: "assistant",
+        name: "Mission Guide",
+        body: "Question Bank",
+        questionBank: true,
+      },
+    ]);
+  }
+
+  function openQuestionBankRound(round: ContradictionRound) {
+    const roundIndex = contradictionRounds.findIndex((candidateRound) => candidateRound.slug === round.slug);
+    if (roundIndex < 0 || getQuestionBankButtonState(round, roundIndex).isLocked) {
+      return;
+    }
+
+    const interactionId = getMessageId(`round-${selectedActivity?.id ?? "activity"}`);
+
+    setActiveRoundSlug(round.slug);
+    setActiveTrainingInteractionId(interactionId);
+    setSelectedLabels([]);
+    setRoundResult(null);
+    setTrainingError(null);
+    setCurrentMode("activity");
+    setMessages((current) => [
+      ...current,
+      {
+        id: interactionId,
+        role: "assistant",
+        name: "Mission Guide",
+        body: "Question selected from the bank.",
+        trainingRound: {
+          interactionId,
+          round,
+          selectedLabels: [],
+          incorrectAttempts: 0,
+          result: null,
+        },
+      },
+    ]);
+  }
+
+  function getQuestionBankButtonState(round: ContradictionRound, index: number) {
+    const isCompleted = completedRoundSlugs.has(round.slug);
+    const isActive = round.slug === activeRoundSlug;
+    const completedIndexes = contradictionRounds
+      .map((candidateRound, candidateIndex) =>
+        completedRoundSlugs.has(candidateRound.slug) ? candidateIndex : -1)
+      .filter((candidateIndex) => candidateIndex >= 0);
+    const furthestCompletedIndex = completedIndexes.length > 0
+      ? Math.max(...completedIndexes)
+      : -1;
+    const unlockedThroughIndex = Math.max(activeRoundIndex, furthestCompletedIndex + 1);
+
+    return {
+      isActive,
+      isCompleted,
+      isLocked: !isCompleted && index > unlockedThroughIndex,
+    };
+  }
+
   function startQuest(mission: Mission) {
     if (mission.status === "Locked") {
       return;
@@ -335,6 +550,9 @@ export function ThinkertoolsMissionsChat() {
     setSelectedActivity(null);
     setCurrentMode("quest");
     setCurrentQuestStage("intake");
+    setActiveTrainingInteractionId(null);
+    setSelectedLabels([]);
+    setRoundResult(null);
     enqueueScriptMessages(`quest-${mission.id}-intake`, `Start quest: ${mission.title}`, [
       `${mission.title} is now active.`,
       "Stage 1: intake. The mission details panel will keep requirements and revealed facts visible while the chat handles decisions.",
@@ -368,15 +586,36 @@ export function ThinkertoolsMissionsChat() {
       setContradictionRounds(response.rounds);
       setActiveRoundSlug(firstRound?.slug ?? "");
       setCurrentChatScript(`activity-${activity.id}`);
-      setAssistantQueue((current) => [
+      if (!firstRound) {
+        setActiveTrainingInteractionId(null);
+        setAssistantQueue((current) => [
+          ...current,
+          {
+            id: getMessageId(`a-activity-${activity.id}`),
+            role: "assistant",
+            name: "Mission Guide",
+            body: "No Contradiction Spotting training content is available yet.",
+          },
+        ]);
+        return;
+      }
+
+      const interactionId = getMessageId(`round-${activity.id}`);
+      setActiveTrainingInteractionId(interactionId);
+      setMessages((current) => [
         ...current,
         {
-          id: getMessageId(`a-activity-${activity.id}`),
+          id: interactionId,
           role: "assistant",
           name: "Mission Guide",
-          body: firstRound
-            ? `${firstRound.questionText} Select or type two labels.`
-            : "No Contradiction Spotting training content is available yet.",
+          body: "Contradiction Spotting is ready. Select or type two labels.",
+          trainingRound: {
+            interactionId,
+            round: firstRound,
+            selectedLabels: [],
+            incorrectAttempts: 0,
+            result: null,
+          },
         },
       ]);
     } catch (loadError) {
@@ -404,15 +643,29 @@ export function ThinkertoolsMissionsChat() {
     }
 
     setSelectedLabels((current) => {
-      if (current.includes(label)) {
-        return current.filter((item) => item !== label);
+      const nextSelection = current.includes(label)
+        ? current.filter((item) => item !== label)
+        : current.length < 2
+          ? [...current, label]
+          : [current[1], label];
+
+      if (activeTrainingInteractionId) {
+        setMessages((messagesCurrent) => messagesCurrent.map((message) => {
+          if (message.trainingRound?.interactionId !== activeTrainingInteractionId) {
+            return message;
+          }
+
+          return {
+            ...message,
+            trainingRound: {
+              ...message.trainingRound,
+              selectedLabels: nextSelection,
+            },
+          };
+        }));
       }
 
-      if (current.length < 2) {
-        return [...current, label];
-      }
-
-      return [current[1], label];
+      return nextSelection;
     });
   }
 
@@ -446,20 +699,101 @@ export function ThinkertoolsMissionsChat() {
         },
       );
 
-      setRoundResult(response.result);
       setTrainingProgress(response.progress);
-      setSelectedLabels(response.result.selectedLabels);
       setDraft("");
+
+      if (!response.result.wasCorrect) {
+        setSelectedLabels([]);
+        if (activeTrainingInteractionId) {
+          setMessages((current) => current.map((message) => {
+            if (message.trainingRound?.interactionId !== activeTrainingInteractionId) {
+              return message;
+            }
+
+            return {
+              ...message,
+              trainingRound: {
+                ...message.trainingRound,
+                incorrectAttempts: message.trainingRound.incorrectAttempts + 1,
+                selectedLabels: [],
+              },
+            };
+          }));
+        }
+        setAssistantQueue((current) => [
+          ...current,
+          {
+            id: getMessageId("a-training-retry"),
+            role: "assistant",
+            name: "Mission Guide",
+            body: "Not quite. Try another pair. Look for the two claims that cannot both stay true without changing or qualifying one of them.",
+          },
+        ]);
+        return;
+      }
+
+      setSelectedLabels(response.result.selectedLabels);
+      setCompletedRoundSlugs((current) => {
+        const next = new Set(current);
+        next.add(activeRound.slug);
+        return next;
+      });
+      if (activeTrainingInteractionId) {
+        setMessages((current) => current.map((message) => {
+          if (message.trainingRound?.interactionId !== activeTrainingInteractionId) {
+            return message;
+          }
+
+          return {
+            ...message,
+            trainingRound: {
+              ...message.trainingRound,
+              selectedLabels: response.result.selectedLabels,
+              result: response.result,
+            },
+          };
+        }));
+      }
+      const activeRoundIndex = contradictionRounds.findIndex((round) => round.slug === activeRound.slug);
+      const nextRound = activeRoundIndex >= 0
+        ? contradictionRounds[activeRoundIndex + 1] ?? null
+        : null;
+      const nextInteractionId = nextRound
+        ? getMessageId(`round-${selectedActivity?.id ?? "activity"}`)
+        : null;
+
+      if (nextRound && nextInteractionId) {
+        setActiveRoundSlug(nextRound.slug);
+        setActiveTrainingInteractionId(nextInteractionId);
+        setSelectedLabels([]);
+        setRoundResult(null);
+      } else {
+        setRoundResult(response.result);
+      }
+
       setAssistantQueue((current) => [
         ...current,
         {
           id: getMessageId("a-training-result"),
           role: "assistant",
           name: "Mission Guide",
-          body: response.result.wasCorrect
-            ? `Correct. ${response.result.explanation} +${response.result.awardedXp} XP.`
-            : `Not quite. The strongest pair is ${response.result.correctAnswerLabels.join(" + ")}. ${response.result.explanation}`,
+          body: `Correct. ${response.result.explanation} +${response.result.awardedXp} XP.`,
         },
+        ...(nextRound && nextInteractionId
+          ? [{
+              id: nextInteractionId,
+              role: "assistant" as const,
+              name: "Mission Guide",
+              body: "Next Contradiction Spotting question is ready. Select or type two labels.",
+              trainingRound: {
+                interactionId: nextInteractionId,
+                round: nextRound,
+                selectedLabels: [],
+                incorrectAttempts: 0,
+                result: null,
+              },
+            }]
+          : []),
       ]);
     } catch (submitError) {
       const message = isApiRequestError(submitError)
@@ -521,19 +855,38 @@ export function ThinkertoolsMissionsChat() {
             </div>
             <div className={styles.skillList}>
               {skills.map((skill) => (
-                <button
-                  className={styles.skillItem}
-                  key={skill.id}
-                  onClick={() => {
-                    setSelectedSkill(skill);
-                    setSelectedActivity(null);
-                  }}
-                  type="button"
-                >
-                  <strong>{skill.name}</strong>
-                  <span>Level {skill.level}</span>
-                  <span>{skill.xp} XP</span>
-                </button>
+                (() => {
+                  const skillProgress = getSkillProgressDisplay(skill);
+
+                  return (
+                    <button
+                      className={styles.skillItem}
+                      key={skill.id}
+                      onClick={() => {
+                        setSelectedSkill(skill);
+                        setSelectedActivity(null);
+                      }}
+                      type="button"
+                    >
+                      <strong>{skill.name}</strong>
+                      {skillProgress.status === "loading" ? (
+                        <span>Loading progress...</span>
+                      ) : skillProgress.status === "unavailable" ? (
+                        <span>Progress unavailable</span>
+                      ) : (
+                        <>
+                          <span>Level {skillProgress.level}</span>
+                          <span>{skillProgress.xp} XP</span>
+                        </>
+                      )}
+                      {skillProgress.levelXp !== null && skillProgress.xpRequiredForNextLevel !== null ? (
+                        <span>
+                          {skillProgress.levelXp}/{skillProgress.xpRequiredForNextLevel} level XP
+                        </span>
+                      ) : null}
+                    </button>
+                  );
+                })()
               ))}
             </div>
           </aside>
@@ -545,40 +898,49 @@ export function ThinkertoolsMissionsChat() {
                   <h2>{selectedSkill.name}</h2>
                 </div>
                 <div className={styles.activityList}>
-                  {selectedSkill.activities.map((activity) => (
-                    <div
-                      className={`${styles.activityItem} ${
-                        selectedActivity?.id === activity.id ? styles.selectedActivityItem : ""
-                      }`}
-                      key={activity.id}
-                    >
-                      <span>Level {activity.level}</span>
-                      <strong>{activity.name}</strong>
-                      <span>
-                        {activity.xp} XP / {activity.status}
-                      </span>
-                      {activity.status === "Unlocked" ? (
-                        <button
-                          className={styles.panelActionButton}
-                          onClick={() => {
-                            void startActivity(selectedSkill, activity);
-                          }}
-                          type="button"
-                        >
-                          {trainingLoading && selectedActivity?.id === activity.id ? "Loading..." : "Start Activity"}
-                        </button>
-                      ) : (
-                        <div className={styles.lockedRequirements}>
-                          <span>Requirements</span>
-                          <ul>
-                            {activity.requirements.map((requirement) => (
-                              <li key={requirement}>{requirement}</li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
-                    </div>
-                  ))}
+                  {selectedSkill.activities.map((activity) => {
+                    const activityStatus = getActivityStatusLabel(selectedSkill, activity);
+                    const activityUnlocked = activityStatus === "Unlocked";
+                    const unavailableMessage = getUnavailableActivityMessage(activity);
+
+                    return (
+                      <div
+                        className={`${styles.activityItem} ${
+                          selectedActivity?.id === activity.id ? styles.selectedActivityItem : ""
+                        }`}
+                        key={activity.id}
+                      >
+                        <span>Level {activity.level}</span>
+                        <strong>{activity.name}</strong>
+                        <span>
+                          {activity.xp} XP / {activityStatus}
+                        </span>
+                        {activityUnlocked && !unavailableMessage ? (
+                          <button
+                            className={styles.panelActionButton}
+                            onClick={() => {
+                              void startActivity(selectedSkill, activity);
+                            }}
+                            type="button"
+                          >
+                            {trainingLoading && selectedActivity?.id === activity.id ? "Loading..." : "Start Activity"}
+                          </button>
+                        ) : (
+                          <div className={styles.lockedRequirements}>
+                            <span>{unavailableMessage ? "Availability" : "Requirements"}</span>
+                            <ul>
+                              {(unavailableMessage
+                                ? [unavailableMessage]
+                                : getActivityRequirements(selectedSkill, activity)
+                              ).map((requirement) => (
+                                <li key={requirement}>{requirement}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </>
             ) : (
@@ -602,7 +964,13 @@ export function ThinkertoolsMissionsChat() {
           </header>
 
           <div className={styles.messageStack}>
-            {messages.map((message) => (
+            {messages.map((message) => {
+              const roundTranscript = message.trainingRound;
+              const isActiveRoundMessage = roundTranscript?.interactionId === activeTrainingInteractionId
+                && currentMode === "activity"
+                && !roundTranscript.result;
+
+              return (
               <article
                 className={`${styles.messageRow} ${
                   message.role === "user" ? styles.userRow : styles.assistantRow
@@ -612,68 +980,108 @@ export function ThinkertoolsMissionsChat() {
                 <div className={styles.avatar} aria-hidden="true">
                   {message.role === "user" ? "Y" : "M"}
                 </div>
-                <div className={styles.bubble}>
-                  <div className={styles.messageName}>{message.name}</div>
-                  <p>{message.body}</p>
-                </div>
+                {message.questionBank ? (
+                  <section className={styles.questionBankDiagram} aria-label="Question bank">
+                    <div className={styles.questionBankHeader}>
+                      <strong>Question Bank</strong>
+                      <span>{activeRoundNumber}/{contradictionRounds.length}</span>
+                    </div>
+                    <div className={styles.questionBankButtons}>
+                      {contradictionRounds.map((round, index) => {
+                        const questionNumber = index + 1;
+                        const buttonState = getQuestionBankButtonState(round, index);
+
+                        return (
+                          <button
+                            className={`${styles.questionBankButton} ${
+                              buttonState.isCompleted ? styles.completedQuestionBankButton : ""
+                            } ${
+                              buttonState.isActive && !buttonState.isCompleted ? styles.activeQuestionBankButton : ""
+                            } ${
+                              buttonState.isLocked ? styles.lockedQuestionBankButton : ""
+                            }`}
+                            disabled={buttonState.isLocked}
+                            key={round.slug}
+                            onClick={() => openQuestionBankRound(round)}
+                            type="button"
+                            aria-label={`Question ${questionNumber}${buttonState.isLocked ? " locked" : ""}`}
+                          >
+                            <span>{questionNumber}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </section>
+                ) : roundTranscript ? (
+                  <section className={styles.trainingRound} aria-label="Training question">
+                    <div className={styles.trainingRoundHeader}>
+                      <span>{roundTranscript.round.difficultyLabel}</span>
+                      <strong>{CONTRADICTION_SPOTTING_DISPLAY_TITLE}</strong>
+                      <span>{roundTranscript.round.xpReward} XP</span>
+                    </div>
+                    <p className={styles.trainingQuestion}>{roundTranscript.round.questionText}</p>
+                    <div className={styles.claimList}>
+                      {roundTranscript.round.promptClaims.map((claim) => {
+                        const isSelected = roundTranscript.selectedLabels.includes(claim.label);
+                        const isCorrect = roundTranscript.result?.correctAnswerLabels.includes(claim.label) ?? false;
+                        return (
+                          <button
+                            className={`${styles.claimButton} ${
+                              isSelected ? styles.selectedClaimButton : ""
+                            } ${roundTranscript.result && isCorrect ? styles.correctClaimButton : ""}`}
+                            disabled={!isActiveRoundMessage || submittingTraining}
+                            key={claim.label}
+                            onClick={() => toggleClaimLabel(claim.label)}
+                            type="button"
+                          >
+                            <span>{claim.label}</span>
+                            <strong>{claim.text}</strong>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {isActiveRoundMessage && trainingError ? (
+                      <p className={styles.trainingError}>{trainingError}</p>
+                    ) : null}
+                    {roundTranscript.result ? (
+                      <div className={styles.trainingFeedback}>
+                        <strong>{roundTranscript.result.wasCorrect ? "Correct" : "Review"}</strong>
+                        <p>{roundTranscript.result.explanation}</p>
+                        <span>
+                          Selected {roundTranscript.result.selectedLabels.join(" + ")} / +{roundTranscript.result.awardedXp} XP
+                        </span>
+                      </div>
+                    ) : null}
+                    {isActiveRoundMessage && roundTranscript.incorrectAttempts > 0 ? (
+                      <div className={`${styles.trainingFeedback} ${styles.retryFeedback}`}>
+                        <strong>Try again</strong>
+                        <p>Attempt {roundTranscript.incorrectAttempts}. Choose a different pair.</p>
+                      </div>
+                    ) : null}
+                    {isActiveRoundMessage && trainingProgress ? (
+                      <div className={styles.trainingProgress}>
+                        Level {trainingProgress.currentLevel} / {trainingProgress.totalXp} XP total
+                      </div>
+                    ) : null}
+                  </section>
+                ) : (
+                  <div className={styles.bubble}>
+                    <div className={styles.messageName}>{message.name}</div>
+                    <p>{message.body}</p>
+                  </div>
+                )}
               </article>
-            ))}
-
-            {activeRound ? (
-              <section className={styles.trainingRound} aria-label="Active training question">
-                <div className={styles.trainingRoundHeader}>
-                  <span>{activeRound.difficultyLabel}</span>
-                  <strong>{activeRound.title}</strong>
-                  <span>{activeRound.xpReward} XP</span>
-                </div>
-                <p className={styles.trainingQuestion}>{activeRound.questionText}</p>
-                <div className={styles.claimList}>
-                  {activeRound.promptClaims.map((claim) => {
-                    const isSelected = selectedLabels.includes(claim.label);
-                    const isCorrect = roundResult?.correctAnswerLabels.includes(claim.label) ?? false;
-                    return (
-                      <button
-                        className={`${styles.claimButton} ${
-                          isSelected ? styles.selectedClaimButton : ""
-                        } ${roundResult && isCorrect ? styles.correctClaimButton : ""}`}
-                        disabled={Boolean(roundResult) || submittingTraining}
-                        key={claim.label}
-                        onClick={() => toggleClaimLabel(claim.label)}
-                        type="button"
-                      >
-                        <span>{claim.label}</span>
-                        <strong>{claim.text}</strong>
-                      </button>
-                    );
-                  })}
-                </div>
-                {trainingError ? <p className={styles.trainingError}>{trainingError}</p> : null}
-                {roundResult ? (
-                  <div className={styles.trainingFeedback}>
-                    <strong>{roundResult.wasCorrect ? "Correct" : "Review"}</strong>
-                    <p>{roundResult.explanation}</p>
-                    <span>
-                      Selected {roundResult.selectedLabels.join(" + ")} / Correct{" "}
-                      {roundResult.correctAnswerLabels.join(" + ")} / +{roundResult.awardedXp} XP
-                    </span>
-                  </div>
-                ) : null}
-                {trainingProgress ? (
-                  <div className={styles.trainingProgress}>
-                    Level {trainingProgress.currentLevel} / {trainingProgress.totalXp} XP total
-                  </div>
-                ) : null}
-              </section>
-            ) : null}
+              );
+            })}
           </div>
 
-          <div className={styles.suggestionBar} aria-label="Suggested replies">
-            {suggestedReplies.map((reply) => (
-              <button key={reply} type="button" onClick={() => sendMessage(reply)}>
-                {reply}
+          {shouldShowQuestionBankButton ? (
+            <div className={styles.activityActionBar}>
+              <button type="button" onClick={showQuestionBankStatus}>
+                Question Bank ({activeRoundNumber}/{contradictionRounds.length})
               </button>
-            ))}
-          </div>
+            </div>
+          ) : null}
 
           <form className={styles.composer} onSubmit={handleSubmit}>
             <label className={styles.composerLabel} htmlFor="mission-chat-input">

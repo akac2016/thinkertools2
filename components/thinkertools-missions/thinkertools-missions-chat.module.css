@@ -394,8 +394,7 @@
   box-shadow: 0 12px 30px rgba(15, 23, 42, 0.08);
   display: grid;
   gap: 14px;
-  margin-left: 44px;
-  max-width: min(620px, calc(100% - 44px));
+  max-width: min(620px, calc(100% - 54px));
   padding: 16px;
 }
 
@@ -514,6 +513,15 @@
   font-size: 14px;
 }
 
+.retryFeedback {
+  background: #fff3f1;
+  border-color: rgba(180, 59, 50, 0.24);
+}
+
+.retryFeedback strong {
+  color: #9a2f27;
+}
+
 .trainingFeedback p,
 .trainingFeedback span,
 .trainingProgress {
@@ -528,28 +536,103 @@
   padding-top: 10px;
 }
 
-.suggestionBar {
+.questionBankDiagram {
+  background: #ffffff;
+  border: 1px solid rgba(32, 48, 74, 0.12);
+  border-radius: 8px;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.08);
+  display: grid;
+  gap: 14px;
+  max-width: min(620px, calc(100% - 54px));
+  padding: 16px;
+}
+
+.questionBankHeader {
+  align-items: center;
+  border-bottom: 1px solid rgba(113, 128, 150, 0.14);
+  color: #172033;
+  display: flex;
+  justify-content: space-between;
+  padding-bottom: 10px;
+}
+
+.questionBankHeader strong {
+  font-size: 14px;
+}
+
+.questionBankHeader span {
+  color: #637083;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.questionBankButtons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.questionBankButton {
+  align-items: center;
+  background: #f8fafc;
+  border: 2px solid rgba(32, 48, 74, 0.72);
+  border-radius: 50%;
+  color: #20304a;
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 750;
+  justify-content: center;
+  height: 64px;
+  padding: 0;
+  width: 40px;
+}
+
+.questionBankButton:hover {
+  background: #eef3f8;
+  border-color: rgba(32, 48, 74, 0.36);
+}
+
+.activeQuestionBankButton {
+  background: #ffffff;
+  border-color: #20304a;
+  color: #20304a;
+}
+
+.completedQuestionBankButton {
+  background: #2f7d5b;
+  border-color: #2f7d5b;
+  color: #ffffff;
+}
+
+.lockedQuestionBankButton,
+.lockedQuestionBankButton:hover {
+  background: #eef1f5;
+  border-color: rgba(99, 112, 131, 0.28);
+  color: #9aa3b1;
+  cursor: not-allowed;
+}
+
+.activityActionBar {
   border-top: 1px solid rgba(113, 128, 150, 0.14);
   display: flex;
-  gap: 8px;
-  overflow-x: auto;
   padding: 12px 18px 0;
 }
 
-.suggestionBar button {
+.activityActionBar button {
   background: #ffffff;
-  border: 1px solid rgba(32, 48, 74, 0.2);
+  border: 1px solid rgba(32, 48, 74, 0.22);
   border-radius: 999px;
   color: #20304a;
   cursor: pointer;
-  flex: 0 0 auto;
   font: inherit;
   font-size: 13px;
   min-height: 34px;
   padding: 7px 12px;
 }
 
-.suggestionBar button:hover {
+.activityActionBar button:hover {
   background: #eef3f8;
   border-color: rgba(32, 48, 74, 0.36);
 }
@@ -865,7 +948,6 @@
   }
 
   .trainingRound {
-    margin-left: 0;
     max-width: 100%;
   }
 
