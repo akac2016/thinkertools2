@@ -55,7 +55,7 @@ export function extractRoundTypeTag(roundContent: TrainingActivityRoundContent):
     ? roundContent.round_type.trim()
     : "";
 
-  return roundType || "practice_standard";
+  return roundType || "activity_standard";
 }
 
 export function extractCorrectAnswerLabels(roundContent: TrainingActivityRoundContent): string[] {

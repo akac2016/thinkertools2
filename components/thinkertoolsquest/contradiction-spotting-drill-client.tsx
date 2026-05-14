@@ -41,13 +41,13 @@ type SkillCatalogEntry = {
 };
 
 type LoadRoundsResponse = {
-  skill: {
+  training: {
     id: string;
     slug: string;
     title: string;
   };
   progress: ProgressState;
-  skillCatalog: SkillCatalogEntry[];
+  trainingCatalog: SkillCatalogEntry[];
   rounds: ContradictionRound[];
 };
 
@@ -376,15 +376,17 @@ export function ContradictionSpottingDrillClient() {
       setError(null);
 
       try {
-        const response = await apiFetch<LoadRoundsResponse>("/api/thinkertoolsquest/contradiction-rounds");
+        const response = await apiFetch<LoadRoundsResponse>(
+          "/api/thinkertools-missions/training/contradiction-spotting",
+        );
         if (!mounted) {
           return;
         }
 
-        setActiveSkillSlug(response.skill.slug);
-        setSkillTitle(response.skill.title);
+        setActiveSkillSlug(response.training.slug);
+        setSkillTitle(response.training.title);
         setProgress(response.progress);
-        setSkillCatalog(response.skillCatalog);
+        setSkillCatalog(response.trainingCatalog);
         setRounds(response.rounds);
         setActiveRoundSlug((currentSlug) => {
           if (currentSlug && response.rounds.some((round) => round.slug === currentSlug)) {
@@ -714,14 +716,17 @@ export function ContradictionSpottingDrillClient() {
     }, 220);
 
     try {
-      const response = await apiFetch<SubmitRoundResponse>("/api/thinkertoolsquest/contradiction-rounds/submit", {
-        method: "POST",
-        body: JSON.stringify({
-          activitySlug: activeRound.slug,
-          selectedLabels,
-          typedAnswer: incomingText,
-        }),
-      });
+      const response = await apiFetch<SubmitRoundResponse>(
+        "/api/thinkertools-missions/training/contradiction-spotting/submit",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            activitySlug: activeRound.slug,
+            selectedLabels,
+            typedAnswer: incomingText,
+          }),
+        },
+      );
 
       const elapsedMs = Date.now() - submitStartedAt;
       const minimumTurnMs = 260;

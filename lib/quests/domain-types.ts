@@ -1,14 +1,14 @@
-export const QUESTS_MAX_LEVEL = 20 as const;
+export const MISSIONS_MAX_LEVEL = 20 as const;
 
-export const QUESTS_ACTIVE_SKILL_SLUG = "philosophical-reasoning" as const;
+export const ACTIVE_TRAINING_SLUG = "philosophical-reasoning" as const;
 
-export const TRAINING_ACTIVITY_CONTENT_TYPE = "practice" as const;
-export const QUESTS_ACTIVE_QUEST_CONTENT_TYPE = "quest" as const;
+export const TRAINING_ACTIVITY_CONTENT_TYPE = "activity" as const;
+export const ACTIVE_MISSION_CONTENT_TYPE = "mission" as const;
 
 export type TrainingActivityContentType = typeof TRAINING_ACTIVITY_CONTENT_TYPE;
-export type QuestsQuestContentType = typeof QUESTS_ACTIVE_QUEST_CONTENT_TYPE;
+export type MissionContentType = typeof ACTIVE_MISSION_CONTENT_TYPE;
 
-export type QuestsContradictionSpottingRoundContent = {
+export type ContradictionSpottingRoundContent = {
   prompt_claims: string[];
   question_text: string;
   correct_answer_labels: string[];
@@ -17,10 +17,10 @@ export type QuestsContradictionSpottingRoundContent = {
 };
 
 export type TrainingActivityRoundContent =
-  Partial<QuestsContradictionSpottingRoundContent>
+  Partial<ContradictionSpottingRoundContent>
   & Record<string, unknown>;
 
-export type QuestsSkillRow = {
+export type TrainingRow = {
   id: string;
   slug: string;
   title: string;
@@ -35,7 +35,7 @@ export type TrainingActivityRow = {
   id: string;
   slug: string;
   title: string;
-  primary_skill_id: string;
+  primary_training_id: string;
   content_type: TrainingActivityContentType;
   template_family: string;
   short_description: string;
@@ -52,19 +52,19 @@ export type TrainingActivityRow = {
   updated_at: string;
 };
 
-export type QuestsQuestRow = {
+export type MissionRow = {
   id: string;
   slug: string;
   title: string;
-  primary_skill_id: string;
-  secondary_skill_ids: string[];
-  content_type: QuestsQuestContentType;
+  primary_training_id: string;
+  secondary_training_ids: string[];
+  content_type: MissionContentType;
   narrative_hook: string;
   short_description: string;
   difficulty_label: string;
-  required_skill_level: number;
+  required_training_level: number;
   prerequisite_training_activity_ids: string[];
-  prerequisite_quest_ids: string[];
+  prerequisite_mission_ids: string[];
   completion_criteria: string;
   xp_reward: number;
   rewards_metadata: Record<string, unknown>;
@@ -73,10 +73,10 @@ export type QuestsQuestRow = {
   updated_at: string;
 };
 
-export type QuestsUserSkillProgressRow = {
+export type UserTrainingProgressRow = {
   id: string;
   user_id: string;
-  skill_id: string;
+  training_id: string;
   current_level: number;
   current_level_xp: number;
   total_xp: number;
@@ -87,7 +87,7 @@ export type QuestsUserSkillProgressRow = {
 export type TrainingActivityAttemptRow = {
   id: string;
   user_id: string;
-  skill_id: string;
+  training_id: string;
   training_activity_id: string;
   content_type: TrainingActivityContentType;
   was_successful: boolean;
@@ -96,23 +96,23 @@ export type TrainingActivityAttemptRow = {
   completed_at: string;
 };
 
-export type QuestsQuestCompletionRow = {
+export type MissionCompletionRow = {
   id: string;
   user_id: string;
-  skill_id: string;
-  quest_id: string;
-  content_type: QuestsQuestContentType;
+  training_id: string;
+  mission_id: string;
+  content_type: MissionContentType;
   awarded_xp: number;
   completion_metadata: Record<string, unknown>;
   completed_at: string;
 };
 
-export type QuestsSkillProgress = {
+export type TrainingProgress = {
   currentLevel: number;
   currentLevelXp: number;
   totalXp: number;
 };
 
-export type QuestsCompletionContentType =
+export type CompletionContentType =
   | TrainingActivityContentType
-  | QuestsQuestContentType;
+  | MissionContentType;

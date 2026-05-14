@@ -3,65 +3,65 @@ import "server-only";
 import { jsonError } from "@/lib/http";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 
-import type { QuestsSkillRow, QuestsUserSkillProgressRow } from "./domain-types.ts";
+import type { TrainingRow, UserTrainingProgressRow } from "./domain-types.ts";
 
-const SKILL_SELECT = "id,slug,title";
-const PROGRESS_SELECT = "id,user_id,skill_id,current_level,current_level_xp,total_xp";
+const TRAINING_SELECT = "id,slug,title";
+const PROGRESS_SELECT = "id,user_id,training_id,current_level,current_level_xp,total_xp";
 
-export async function getActiveSkillBySlug(skillSlug: string) {
-  const skillResult = await supabaseAdmin
-    .from("quests_skills")
-    .select(SKILL_SELECT)
-    .eq("slug", skillSlug)
+export async function getActiveTrainingBySlug(trainingSlug: string) {
+  const trainingResult = await supabaseAdmin
+    .from("trainings")
+    .select(TRAINING_SELECT)
+    .eq("slug", trainingSlug)
     .eq("is_active", true)
     .maybeSingle();
 
-  if (skillResult.error) {
+  if (trainingResult.error) {
     return {
       ok: false as const,
-      response: jsonError("Failed to load active quest skill", {
+      response: jsonError("Failed to load active training", {
         status: 500,
-        code: "QUESTS_SKILL_LOAD_FAILED",
+        code: "MISSIONS_TRAINING_LOAD_FAILED",
         details: {
-          dbCode: skillResult.error.code ?? null,
-          dbMessage: skillResult.error.message,
+          dbCode: trainingResult.error.code ?? null,
+          dbMessage: trainingResult.error.message,
         },
       }),
     };
   }
 
-  const skillData = skillResult.data as Pick<QuestsSkillRow, "id" | "slug" | "title"> | null;
+  const trainingData = trainingResult.data as Pick<TrainingRow, "id" | "slug" | "title"> | null;
 
-  if (!skillData) {
+  if (!trainingData) {
     return {
       ok: false as const,
-      response: jsonError("Active quest skill is not configured", {
+      response: jsonError("Active training is not configured", {
         status: 404,
-        code: "QUESTS_SKILL_NOT_FOUND",
+        code: "MISSIONS_TRAINING_NOT_FOUND",
       }),
     };
   }
 
   return {
     ok: true as const,
-    data: skillData,
+    data: trainingData,
   };
 }
 
-export async function getOrCreateUserSkillProgress(input: { userId: string; skillId: string }) {
+export async function getOrCreateUserTrainingProgress(input: { userId: string; trainingId: string }) {
   const existing = await supabaseAdmin
-    .from("quests_user_skill_progress")
+    .from("user_training_progress")
     .select(PROGRESS_SELECT)
     .eq("user_id", input.userId)
-    .eq("skill_id", input.skillId)
+    .eq("training_id", input.trainingId)
     .maybeSingle();
 
   if (existing.error) {
     return {
       ok: false as const,
-      response: jsonError("Failed to load user quest progress", {
+      response: jsonError("Failed to load user training progress", {
         status: 500,
-        code: "QUESTS_PROGRESS_LOAD_FAILED",
+        code: "MISSIONS_PROGRESS_LOAD_FAILED",
         details: {
           dbCode: existing.error.code ?? null,
           dbMessage: existing.error.message,
@@ -70,10 +70,10 @@ export async function getOrCreateUserSkillProgress(input: { userId: string; skil
     };
   }
 
-  const existingData = existing.data as Pick<QuestsUserSkillProgressRow,
+  const existingData = existing.data as Pick<UserTrainingProgressRow,
     | "id"
     | "user_id"
-    | "skill_id"
+    | "training_id"
     | "current_level"
     | "current_level_xp"
     | "total_xp"
@@ -87,10 +87,10 @@ export async function getOrCreateUserSkillProgress(input: { userId: string; skil
   }
 
   const inserted = await supabaseAdmin
-    .from("quests_user_skill_progress")
+    .from("user_training_progress")
     .insert({
       user_id: input.userId,
-      skill_id: input.skillId,
+      training_id: input.trainingId,
       current_level: 1,
       current_level_xp: 0,
       total_xp: 0,
@@ -101,9 +101,9 @@ export async function getOrCreateUserSkillProgress(input: { userId: string; skil
   if (inserted.error) {
     return {
       ok: false as const,
-      response: jsonError("Failed to initialize user quest progress", {
+      response: jsonError("Failed to initialize user training progress", {
         status: 500,
-        code: "QUESTS_PROGRESS_INIT_FAILED",
+        code: "MISSIONS_PROGRESS_INIT_FAILED",
         details: {
           dbCode: inserted.error.code ?? null,
           dbMessage: inserted.error.message,
@@ -114,10 +114,10 @@ export async function getOrCreateUserSkillProgress(input: { userId: string; skil
 
   return {
     ok: true as const,
-    data: inserted.data as Pick<QuestsUserSkillProgressRow,
+    data: inserted.data as Pick<UserTrainingProgressRow,
       | "id"
       | "user_id"
-      | "skill_id"
+      | "training_id"
       | "current_level"
       | "current_level_xp"
       | "total_xp"

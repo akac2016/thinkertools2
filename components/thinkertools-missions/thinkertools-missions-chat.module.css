@@ -196,6 +196,13 @@
   margin: 0;
 }
 
+.panelHeading p {
+  color: #5b6475;
+  font-size: 13px;
+  line-height: 1.4;
+  margin: 0;
+}
+
 .missionList {
   display: grid;
   gap: 10px;
@@ -243,7 +250,6 @@
   line-height: 1.25;
 }
 
-.missionType,
 .missionStatus,
 .skillItem span {
   color: #6b7280;
@@ -760,7 +766,9 @@
 }
 
 .requirementsBlock,
-.factsBlock {
+.factsBlock,
+.stageBlock,
+.claimsBlock {
   border: 1px solid rgba(113, 128, 150, 0.18);
   border-radius: 8px;
   padding: 14px;
@@ -774,11 +782,43 @@
   background: #ffffff;
 }
 
+.stageBlock {
+  background: #f8fafc;
+  display: grid;
+  gap: 8px;
+}
+
+.claimsBlock {
+  background: #ffffff;
+  display: grid;
+  gap: 10px;
+}
+
 .requirementsBlock h3,
-.factsBlock h3 {
+.factsBlock h3,
+.stageBlock h3,
+.claimsBlock h3 {
   color: #111827;
   font-size: 14px;
   margin: 0 0 10px;
+}
+
+.stageBlock h3,
+.claimsBlock h3 {
+  margin: 0;
+}
+
+.stageBlock span {
+  color: #b43b32;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.stageBlock p {
+  color: #394358;
+  font-size: 13px;
+  line-height: 1.45;
+  margin: 0;
 }
 
 .requirementsBlock ul,
@@ -794,6 +834,58 @@
   color: #394358;
   font-size: 14px;
   line-height: 1.45;
+}
+
+.factsBlock li strong {
+  color: #172033;
+}
+
+.claimSummaryList,
+.resolutionList,
+.missionActionList {
+  display: grid;
+  gap: 8px;
+}
+
+.claimSummaryItem,
+.resolutionItem {
+  align-items: start;
+  background: #f6f8fb;
+  border: 1px solid rgba(32, 48, 74, 0.12);
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 28px 1fr;
+  padding: 10px;
+}
+
+.claimSummaryItem span,
+.resolutionItem span {
+  align-items: center;
+  background: #20304a;
+  border-radius: 999px;
+  color: #ffffff;
+  display: flex;
+  font-size: 12px;
+  font-weight: 750;
+  height: 26px;
+  justify-content: center;
+  line-height: 1;
+  width: 26px;
+}
+
+.claimSummaryItem strong {
+  color: #111827;
+  font-size: 13px;
+  line-height: 1.3;
+}
+
+.claimSummaryItem p,
+.resolutionItem p {
+  color: #394358;
+  font-size: 13px;
+  line-height: 1.4;
+  margin: 0;
 }
 
 .activityList {

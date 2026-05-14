@@ -1,10 +1,10 @@
 import {
-  QUESTS_MAX_LEVEL,
-  type QuestsCompletionContentType,
-  type QuestsSkillProgress,
+  MISSIONS_MAX_LEVEL,
+  type CompletionContentType,
+  type TrainingProgress,
 } from "./domain-types.ts";
 
-export const LEVEL_CAP = QUESTS_MAX_LEVEL;
+export const LEVEL_CAP = MISSIONS_MAX_LEVEL;
 
 export const XP_REQUIRED_BY_LEVEL: Readonly<Record<number, number>> = {
   1: 20,
@@ -31,7 +31,7 @@ export const XP_REQUIRED_BY_LEVEL: Readonly<Record<number, number>> = {
 export const OVERLEVEL_HALF_XP_LEVELS = 2 as const;
 
 export type ProgressionRewardInput = {
-  contentType: QuestsCompletionContentType;
+  contentType: CompletionContentType;
   baseXp: number;
   userLevel: number;
   recommendedLevelMin: number;
@@ -83,7 +83,7 @@ export function computeOverlevelXpMultiplier(
 
 export function computeCompletionRewardXp(input: ProgressionRewardInput): ProgressionRewardResult {
   assertNonNegativeXp(input.baseXp);
-  if (input.contentType === "quest") {
+  if (input.contentType === "mission") {
     return {
       awardedXp: input.baseXp,
       multiplier: 1,
@@ -101,9 +101,9 @@ export function computeCompletionRewardXp(input: ProgressionRewardInput): Progre
 }
 
 export function applyEarnedXp(
-  progress: QuestsSkillProgress,
+  progress: TrainingProgress,
   earnedXp: number,
-): QuestsSkillProgress {
+): TrainingProgress {
   assertNonNegativeXp(earnedXp);
   assertLevelInRange(progress.currentLevel);
   assertNonNegativeXp(progress.currentLevelXp);

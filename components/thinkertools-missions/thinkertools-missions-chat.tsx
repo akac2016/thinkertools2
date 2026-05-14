@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { apiFetch, isApiRequestError } from "@/components/quipx/client";
+import { wrongRecruitMission, type MissionAction, type MissionDefinition } from "@/lib/missions";
 
 import styles from "./thinkertools-missions-chat.module.css";
 
@@ -16,7 +17,7 @@ type ChatMessage = {
 };
 
 type ChatMode = "feed" | "quest" | "activity";
-type QuestStage = "none" | "intake";
+type QuestStage = "none" | string;
 
 type RoundPromptClaim = {
   label: string;
@@ -47,13 +48,14 @@ type ProgressState = {
 };
 
 type LoadContradictionResponse = {
-  skill: {
+  training: {
     id: string;
     slug: string;
     title: string;
   };
   progress: ProgressState;
   rounds: ContradictionRound[];
+  completedRoundSlugs: string[];
 };
 
 type SubmitContradictionResponse = {
@@ -81,10 +83,10 @@ type TrainingRoundTranscript = {
 type Mission = {
   id: string;
   title: string;
-  type: "Mission" | "Quest";
   status: "Available" | "Locked";
   requirements: string[];
   revealedFacts: string[];
+  definition?: MissionDefinition;
 };
 
 type SkillActivity = {
@@ -125,23 +127,22 @@ const CONTRADICTION_SPOTTING_DISPLAY_TITLE = "Contradiction Spotting" as const;
 
 const missions: Mission[] = [
   {
-    id: "wrong-recruit",
-    title: "The Wrong Recruit",
-    type: "Quest",
+    id: wrongRecruitMission.id,
+    title: wrongRecruitMission.title,
     status: "Available",
-    requirements: ["Name must be revealed", "Current year must be revealed"],
-    revealedFacts: [
-      "A recruit file has been opened before identity confirmation.",
-      "The year attached to the case is still unknown.",
-      "The first decision point has not been reached.",
-    ],
+    requirements: [`${wrongRecruitMission.trainingTitle} level ${wrongRecruitMission.requiredTrainingLevel}`],
+    revealedFacts: wrongRecruitMission.stages[0].revealedFactIds
+      .flatMap((factId) => {
+        const fact = wrongRecruitMission.facts.find((candidateFact) => candidateFact.id === factId);
+        return fact ? [fact.body] : [];
+      }),
+    definition: wrongRecruitMission,
   },
   {
     id: "missing-premise",
     title: "Missing Premise",
-    type: "Mission",
     status: "Locked",
-    requirements: ["Complete the first quest intake", "Reveal one player profile field"],
+    requirements: ["Complete the first mission intake", "Reveal one player profile field"],
     revealedFacts: [
       "This mission appears to involve a flawed argument.",
       "The supporting evidence has not been unlocked.",
@@ -232,6 +233,7 @@ export function ThinkertoolsMissionsChat() {
   const [currentQuestStage, setCurrentQuestStage] = useState<QuestStage>("none");
   const [currentChatScript, setCurrentChatScript] = useState("feed-intro");
   const [selectedMission, setSelectedMission] = useState<Mission | null>(null);
+  const [revealedMissionFactIds, setRevealedMissionFactIds] = useState<Set<string>>(() => new Set());
   const [selectedSkill, setSelectedSkill] = useState<Skill | null>(null);
   const [selectedActivity, setSelectedActivity] = useState<SkillActivity | null>(null);
   const [trainingLoading, setTrainingLoading] = useState(false);
@@ -251,6 +253,30 @@ export function ThinkertoolsMissionsChat() {
     () => contradictionRounds.find((round) => round.slug === activeRoundSlug) ?? null,
     [activeRoundSlug, contradictionRounds],
   );
+  const selectedMissionDefinition = selectedMission?.definition ?? null;
+  const activeMissionStage = useMemo(() => {
+    if (!selectedMissionDefinition || currentMode !== "quest" || currentQuestStage === "none") {
+      return null;
+    }
+
+    return selectedMissionDefinition.stages.find((stage) => stage.id === currentQuestStage) ?? null;
+  }, [currentMode, currentQuestStage, selectedMissionDefinition]);
+  const revealedMissionFacts = useMemo(() => {
+    if (!selectedMissionDefinition) {
+      return [];
+    }
+
+    return selectedMissionDefinition.facts.filter((fact) => revealedMissionFactIds.has(fact.id));
+  }, [revealedMissionFactIds, selectedMissionDefinition]);
+  const activeMissionActions = useMemo(() => {
+    if (!selectedMissionDefinition || !activeMissionStage) {
+      return [];
+    }
+
+    return activeMissionStage.actionIds
+      .map((actionId) => selectedMissionDefinition.actions.find((action) => action.id === actionId))
+      .filter((action): action is MissionAction => Boolean(action));
+  }, [activeMissionStage, selectedMissionDefinition]);
   const activeRoundIndex = useMemo(
     () => contradictionRounds.findIndex((round) => round.slug === activeRoundSlug),
     [activeRoundSlug, contradictionRounds],
@@ -373,6 +399,7 @@ export function ThinkertoolsMissionsChat() {
 
         setTrainingProgress(response.progress);
         setContradictionRounds(response.rounds);
+        setCompletedRoundSlugs(new Set(response.completedRoundSlugs));
       } catch {
         if (!mounted) {
           return;
@@ -467,6 +494,142 @@ export function ThinkertoolsMissionsChat() {
     ]);
   }
 
+  function revealMissionFacts(factIds: readonly string[]) {
+    setRevealedMissionFactIds((current) => {
+      const next = new Set(current);
+      factIds.forEach((factId) => next.add(factId));
+      return next;
+    });
+  }
+
+  function getMissionStageNumber(definition: MissionDefinition, stageId: string) {
+    const stageIndex = definition.stages.findIndex((stage) => stage.id === stageId);
+    return stageIndex >= 0 ? stageIndex + 1 : 0;
+  }
+
+  function enqueueMissionStage(
+    definition: MissionDefinition,
+    stageId: string,
+    userAction: string,
+    prefaceMessages: string[] = [],
+  ) {
+    const stage = definition.stages.find((candidateStage) => candidateStage.id === stageId);
+    if (!stage) {
+      return;
+    }
+
+    const stageNumber = getMissionStageNumber(definition, stage.id);
+
+    setCurrentQuestStage(stage.id);
+    revealMissionFacts(stage.revealedFactIds);
+    enqueueScriptMessages(`mission-${definition.slug}-${stage.id}`, userAction, [
+      ...prefaceMessages,
+      `Stage ${stageNumber}: ${stage.title}.`,
+      stage.objective,
+      ...stage.guideMessages,
+    ]);
+  }
+
+  function handleMissionAction(action: MissionAction) {
+    if (!selectedMissionDefinition) {
+      return;
+    }
+
+    const inspectedClaim = selectedMissionDefinition.characterClaims.find((claim) =>
+      action.id === `inspect-${claim.id}`,
+    );
+
+    if (inspectedClaim) {
+      revealMissionFacts(inspectedClaim.revealedFactIds);
+      enqueueScriptMessages(
+        `mission-${selectedMissionDefinition.slug}-${action.id}`,
+        action.label,
+        [
+          `${inspectedClaim.label}. ${inspectedClaim.characterName}`,
+          inspectedClaim.role,
+          inspectedClaim.statement,
+        ],
+      );
+      return;
+    }
+
+    if (action.kind === "select-contradiction") {
+      const { contradictionReview } = selectedMissionDefinition;
+      if (action.targetStageId) {
+        enqueueMissionStage(
+          selectedMissionDefinition,
+          action.targetStageId,
+          action.label,
+          [
+            contradictionReview.prompt,
+            "The next implementation pass will connect this choice to constrained pair selection and scoring.",
+          ],
+        );
+      } else {
+        enqueueScriptMessages(
+          `mission-${selectedMissionDefinition.slug}-contradiction-prompt`,
+          action.label,
+          [
+            contradictionReview.prompt,
+            "The next implementation pass will connect this choice to constrained pair selection and scoring.",
+          ],
+        );
+      }
+      return;
+    }
+
+    if (action.kind === "select-resolution") {
+      const { resolutionReview } = selectedMissionDefinition;
+      if (action.targetStageId) {
+        enqueueMissionStage(
+          selectedMissionDefinition,
+          action.targetStageId,
+          action.label,
+          [
+            resolutionReview.prompt,
+            "The next implementation pass will connect this recommendation to the resolution evaluator.",
+          ],
+        );
+      } else {
+        enqueueScriptMessages(
+          `mission-${selectedMissionDefinition.slug}-resolution-prompt`,
+          action.label,
+          [
+            resolutionReview.prompt,
+            "The next implementation pass will connect this recommendation to the resolution evaluator.",
+          ],
+        );
+      }
+      return;
+    }
+
+    if (action.kind === "complete") {
+      enqueueScriptMessages(
+        `mission-${selectedMissionDefinition.slug}-complete`,
+        action.label,
+        [
+          selectedMissionDefinition.debrief.completionMessage,
+          `Reward planned: ${selectedMissionDefinition.xpReward} ${selectedMissionDefinition.trainingTitle} XP.`,
+          selectedMissionDefinition.debrief.takeaway,
+        ],
+      );
+      return;
+    }
+
+    if (action.kind === "handoff") {
+      enqueueScriptMessages(
+        `mission-${selectedMissionDefinition.slug}-${action.id}`,
+        action.label,
+        [selectedMissionDefinition.debrief.handoffMessage],
+      );
+      return;
+    }
+
+    if (action.targetStageId) {
+      enqueueMissionStage(selectedMissionDefinition, action.targetStageId, action.label);
+    }
+  }
+
   function showQuestionBankStatus() {
     if (!activeRound || activeRoundNumber <= 0 || contradictionRounds.length === 0) {
       return;
@@ -542,21 +705,25 @@ export function ThinkertoolsMissionsChat() {
   }
 
   function startQuest(mission: Mission) {
-    if (mission.status === "Locked") {
+    if (mission.status === "Locked" || !mission.definition) {
       return;
     }
+
+    const openingStage = mission.definition.stages[0];
 
     setSelectedMission(mission);
     setSelectedActivity(null);
     setCurrentMode("quest");
-    setCurrentQuestStage("intake");
+    setCurrentQuestStage(openingStage.id);
+    setRevealedMissionFactIds(new Set(openingStage.revealedFactIds));
     setActiveTrainingInteractionId(null);
     setSelectedLabels([]);
     setRoundResult(null);
-    enqueueScriptMessages(`quest-${mission.id}-intake`, `Start quest: ${mission.title}`, [
+    enqueueScriptMessages(`mission-${mission.definition.slug}-${openingStage.id}`, `Start mission: ${mission.title}`, [
       `${mission.title} is now active.`,
-      "Stage 1: intake. The mission details panel will keep requirements and revealed facts visible while the chat handles decisions.",
-      "First task: review the revealed facts, then tell me which one feels least stable.",
+      `Stage 1: ${openingStage.title}.`,
+      openingStage.objective,
+      ...openingStage.guideMessages,
     ]);
   }
 
@@ -580,10 +747,14 @@ export function ThinkertoolsMissionsChat() {
       const response = await apiFetch<LoadContradictionResponse>(
         "/api/thinkertools-missions/training/contradiction-spotting",
       );
-      const firstRound = response.rounds[0] ?? null;
+      const persistedCompletedRoundSlugs = new Set(response.completedRoundSlugs);
+      const firstRound = response.rounds.find((round) => !persistedCompletedRoundSlugs.has(round.slug))
+        ?? response.rounds[0]
+        ?? null;
 
       setTrainingProgress(response.progress);
       setContradictionRounds(response.rounds);
+      setCompletedRoundSlugs(persistedCompletedRoundSlugs);
       setActiveRoundSlug(firstRound?.slug ?? "");
       setCurrentChatScript(`activity-${activity.id}`);
       if (!firstRound) {
@@ -1101,7 +1272,7 @@ export function ThinkertoolsMissionsChat() {
         </section>
 
         <div className={styles.rightRail}>
-          <aside className={styles.missionPanel} aria-label="Missions and quests">
+          <aside className={styles.missionPanel} aria-label="Missions">
             <div className={styles.panelHeading}>
               <h2>Missions</h2>
             </div>
@@ -1115,7 +1286,6 @@ export function ThinkertoolsMissionsChat() {
                   onClick={() => setSelectedMission(mission)}
                   type="button"
                 >
-                  <span className={styles.missionType}>{mission.type}</span>
                   <strong>{mission.title}</strong>
                   <span className={styles.missionStatus}>{mission.status}</span>
                 </button>
@@ -1127,8 +1297,10 @@ export function ThinkertoolsMissionsChat() {
             {selectedMission ? (
               <>
                 <div className={styles.panelHeading}>
-                  <span className={styles.missionType}>{selectedMission.type}</span>
                   <h2>{selectedMission.title}</h2>
+                  {selectedMissionDefinition ? (
+                    <p>{selectedMissionDefinition.shortDescription}</p>
+                  ) : null}
                 </div>
 
                 <section className={styles.requirementsBlock}>
@@ -1140,27 +1312,120 @@ export function ThinkertoolsMissionsChat() {
                   </ul>
                 </section>
 
+                {selectedMissionDefinition && activeMissionStage ? (
+                  <section className={styles.stageBlock}>
+                    <div>
+                      <span>
+                        Stage {getMissionStageNumber(selectedMissionDefinition, activeMissionStage.id)}
+                      </span>
+                      <h3>{activeMissionStage.title}</h3>
+                    </div>
+                    <p>{activeMissionStage.objective}</p>
+                  </section>
+                ) : selectedMissionDefinition ? (
+                  <section className={styles.stageBlock}>
+                    <div>
+                      <span>{selectedMissionDefinition.missionType}</span>
+                      <h3>{selectedMissionDefinition.trainingTitle}</h3>
+                    </div>
+                    <p>{selectedMissionDefinition.narrativeHook}</p>
+                  </section>
+                ) : null}
+
                 <section className={styles.factsBlock}>
                   <h3>Revealed Facts</h3>
-                  <ul>
-                    {selectedMission.revealedFacts.map((fact) => (
-                      <li key={fact}>{fact}</li>
-                    ))}
-                  </ul>
+                  {selectedMissionDefinition && revealedMissionFacts.length > 0 ? (
+                    <ul>
+                      {revealedMissionFacts.map((fact) => (
+                        <li key={fact.id}>
+                          <strong>{fact.label}:</strong> {fact.body}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <ul>
+                      {selectedMission.revealedFacts.map((fact) => (
+                        <li key={fact}>{fact}</li>
+                      ))}
+                    </ul>
+                  )}
                 </section>
 
+                {selectedMissionDefinition && activeMissionStage?.id === "briefing" ? (
+                  <section className={styles.claimsBlock}>
+                    <h3>Statements</h3>
+                    <div className={styles.claimSummaryList}>
+                      {selectedMissionDefinition.characterClaims.map((claim) => (
+                        <div className={styles.claimSummaryItem} key={claim.id}>
+                          <span>{claim.label}</span>
+                          <div>
+                            <strong>{claim.characterName}</strong>
+                            <p>{claim.role}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                ) : null}
+
+                {selectedMissionDefinition && activeMissionStage?.id === "contradiction-review" ? (
+                  <section className={styles.claimsBlock}>
+                    <h3>{selectedMissionDefinition.contradictionReview.prompt}</h3>
+                    <div className={styles.claimSummaryList}>
+                      {selectedMissionDefinition.characterClaims.map((claim) => (
+                        <div className={styles.claimSummaryItem} key={claim.id}>
+                          <span>{claim.label}</span>
+                          <div>
+                            <strong>{claim.characterName}</strong>
+                            <p>{claim.statement}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                ) : null}
+
+                {selectedMissionDefinition && activeMissionStage?.id === "resolution-choice" ? (
+                  <section className={styles.claimsBlock}>
+                    <h3>{selectedMissionDefinition.resolutionReview.prompt}</h3>
+                    <div className={styles.resolutionList}>
+                      {selectedMissionDefinition.resolutionOptions.map((option) => (
+                        <div className={styles.resolutionItem} key={option.id}>
+                          <span>{option.label}</span>
+                          <p>{option.body}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                ) : null}
+
                 {selectedMission.status === "Available" ? (
-                  <button
-                    className={styles.panelActionButton}
-                    onClick={() => startQuest(selectedMission)}
-                    type="button"
-                  >
-                    Start Quest
-                  </button>
+                  currentMode === "quest" && selectedMissionDefinition && activeMissionActions.length > 0 ? (
+                    <div className={styles.missionActionList}>
+                      {activeMissionActions.map((action) => (
+                        <button
+                          className={styles.panelActionButton}
+                          key={action.id}
+                          onClick={() => handleMissionAction(action)}
+                          type="button"
+                        >
+                          {action.label}
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <button
+                      className={styles.panelActionButton}
+                      onClick={() => startQuest(selectedMission)}
+                      type="button"
+                    >
+                      Start Mission
+                    </button>
+                  )
                 ) : null}
               </>
             ) : (
-              <p className={styles.emptyDetails}>Click on a quest to open details</p>
+              <p className={styles.emptyDetails}>Click on a mission to open details</p>
             )}
           </aside>
         </div>
