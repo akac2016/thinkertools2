@@ -3,7 +3,14 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { apiFetch, isApiRequestError } from "@/components/quipx/client";
-import { wrongRecruitMission, type MissionAction, type MissionDefinition } from "@/lib/missions";
+import {
+  wrongRecruitMission,
+  type MissionAction,
+  type MissionCharacterClaim,
+  type MissionDefinition,
+  type MissionFact,
+  type MissionResolutionOption,
+} from "@/lib/missions";
 
 import styles from "./thinkertools-missions-chat.module.css";
 
@@ -12,6 +19,11 @@ type ChatMessage = {
   role: "assistant" | "user";
   name: string;
   body: string;
+  missionActionSet?: MissionActionSet;
+  missionFactDigest?: MissionFactDigest;
+  missionResolutionSet?: MissionResolutionSet;
+  missionStartPrompt?: MissionStartPrompt;
+  missionStatementSet?: MissionStatementSet;
   trainingRound?: TrainingRoundTranscript;
   questionBank?: boolean;
 };
@@ -87,6 +99,36 @@ type Mission = {
   requirements: string[];
   revealedFacts: string[];
   definition?: MissionDefinition;
+};
+
+type MissionActionSet = {
+  missionId: string;
+  stageId: string;
+  stageTitle: string;
+  actions: MissionAction[];
+};
+
+type MissionStartPrompt = {
+  missionId: string;
+  title: string;
+  status: Mission["status"];
+  requirements: string[];
+};
+
+type MissionFactDigest = {
+  title: string;
+  facts: MissionFact[];
+};
+
+type MissionStatementSet = {
+  title: string;
+  claims: MissionCharacterClaim[];
+  detail: "role" | "statement";
+};
+
+type MissionResolutionSet = {
+  title: string;
+  options: MissionResolutionOption[];
 };
 
 type SkillActivity = {
@@ -248,6 +290,7 @@ export function ThinkertoolsMissionsChat() {
   const [completedRoundSlugs, setCompletedRoundSlugs] = useState<Set<string>>(() => new Set());
   const [submittingTraining, setSubmittingTraining] = useState(false);
   const messageIdCounter = useRef(0);
+  const messageStackRef = useRef<HTMLDivElement | null>(null);
 
   const activeRound = useMemo(
     () => contradictionRounds.find((round) => round.slug === activeRoundSlug) ?? null,
@@ -268,15 +311,6 @@ export function ThinkertoolsMissionsChat() {
 
     return selectedMissionDefinition.facts.filter((fact) => revealedMissionFactIds.has(fact.id));
   }, [revealedMissionFactIds, selectedMissionDefinition]);
-  const activeMissionActions = useMemo(() => {
-    if (!selectedMissionDefinition || !activeMissionStage) {
-      return [];
-    }
-
-    return activeMissionStage.actionIds
-      .map((actionId) => selectedMissionDefinition.actions.find((action) => action.id === actionId))
-      .filter((action): action is MissionAction => Boolean(action));
-  }, [activeMissionStage, selectedMissionDefinition]);
   const activeRoundIndex = useMemo(
     () => contradictionRounds.findIndex((round) => round.slug === activeRoundSlug),
     [activeRoundSlug, contradictionRounds],
@@ -434,6 +468,16 @@ export function ThinkertoolsMissionsChat() {
     return () => window.clearTimeout(timer);
   }, [assistantQueue]);
 
+  useEffect(() => {
+    const messageStack = messageStackRef.current;
+
+    if (!messageStack) {
+      return;
+    }
+
+    messageStack.scrollTop = messageStack.scrollHeight;
+  }, [assistantQueue.length, messages.length]);
+
   function appendUserMessage(text: string) {
     const cleanText = text.trim();
 
@@ -472,7 +516,12 @@ export function ThinkertoolsMissionsChat() {
     setDraft("");
   }
 
-  function enqueueScriptMessages(scriptId: string, userAction: string, assistantBodies: string[]) {
+  function enqueueScriptMessages(
+    scriptId: string,
+    userAction: string,
+    assistantBodies: string[],
+    assistantFollowUps: Array<Omit<ChatMessage, "id" | "role" | "name">> = [],
+  ) {
     setCurrentChatScript(scriptId);
     setMessages((current) => [
       ...current,
@@ -491,6 +540,12 @@ export function ThinkertoolsMissionsChat() {
         name: "Mission Guide",
         body,
       })),
+      ...assistantFollowUps.map((message, index) => ({
+        ...message,
+        id: getMessageId(`a-${scriptId}-follow-up-${index}`),
+        role: "assistant" as const,
+        name: "Mission Guide",
+      })),
     ]);
   }
 
@@ -505,6 +560,84 @@ export function ThinkertoolsMissionsChat() {
   function getMissionStageNumber(definition: MissionDefinition, stageId: string) {
     const stageIndex = definition.stages.findIndex((stage) => stage.id === stageId);
     return stageIndex >= 0 ? stageIndex + 1 : 0;
+  }
+
+  function getMissionStageActions(definition: MissionDefinition, stageId: string) {
+    const stage = definition.stages.find((candidateStage) => candidateStage.id === stageId);
+
+    if (!stage) {
+      return [];
+    }
+
+    return stage.actionIds
+      .map((actionId) => definition.actions.find((action) => action.id === actionId))
+      .filter((action): action is MissionAction => Boolean(action));
+  }
+
+  function getMissionFacts(definition: MissionDefinition, factIds: readonly string[]) {
+    return factIds
+      .map((factId) => definition.facts.find((fact) => fact.id === factId))
+      .filter((fact): fact is MissionFact => Boolean(fact));
+  }
+
+  function getMissionStageFollowUps(
+    definition: MissionDefinition,
+    stage: MissionDefinition["stages"][number],
+  ): Array<Omit<ChatMessage, "id" | "role" | "name">> {
+    const facts = getMissionFacts(definition, stage.revealedFactIds);
+    const followUps: Array<Omit<ChatMessage, "id" | "role" | "name">> = facts.length > 0
+      ? [{
+          body: "New case facts have been added to the record.",
+          missionFactDigest: {
+            title: "Facts revealed",
+            facts,
+          },
+        }]
+      : [];
+
+    if (stage.id === "briefing") {
+      followUps.push({
+        body: "These are the four dispute statements available for inspection.",
+        missionStatementSet: {
+          title: "Statements to inspect",
+          claims: [...definition.characterClaims],
+          detail: "role",
+        },
+      });
+    }
+
+    if (stage.id === "contradiction-review") {
+      followUps.push({
+        body: "Review the statements together before choosing the strongest conflict.",
+        missionStatementSet: {
+          title: "Statements under review",
+          claims: [...definition.characterClaims],
+          detail: "statement",
+        },
+      });
+    }
+
+    if (stage.id === "resolution-choice") {
+      followUps.push({
+        body: "Choose the resolution that best preserves the rule while repairing the exception it failed to handle.",
+        missionResolutionSet: {
+          title: "Resolution options",
+          options: [...definition.resolutionOptions],
+        },
+      });
+    }
+
+    followUps.push({
+      body: "Choose the next step in the case.",
+      missionActionSet: {
+        missionId: definition.id,
+        stageId: stage.id,
+        stageTitle: stage.title,
+        actions: getMissionStageActions(definition, stage.id),
+      },
+    });
+
+    return followUps;
   }
 
   function enqueueMissionStage(
@@ -527,7 +660,7 @@ export function ThinkertoolsMissionsChat() {
       `Stage ${stageNumber}: ${stage.title}.`,
       stage.objective,
       ...stage.guideMessages,
-    ]);
+    ], getMissionStageFollowUps(definition, stage));
   }
 
   function handleMissionAction(action: MissionAction) {
@@ -540,6 +673,8 @@ export function ThinkertoolsMissionsChat() {
     );
 
     if (inspectedClaim) {
+      const facts = getMissionFacts(selectedMissionDefinition, inspectedClaim.revealedFactIds);
+
       revealMissionFacts(inspectedClaim.revealedFactIds);
       enqueueScriptMessages(
         `mission-${selectedMissionDefinition.slug}-${action.id}`,
@@ -549,6 +684,15 @@ export function ThinkertoolsMissionsChat() {
           inspectedClaim.role,
           inspectedClaim.statement,
         ],
+        facts.length > 0
+          ? [{
+              body: `${inspectedClaim.label} has been added to the case facts.`,
+              missionFactDigest: {
+                title: `Fact from statement ${inspectedClaim.label}`,
+                facts,
+              },
+            }]
+          : [],
       );
       return;
     }
@@ -704,6 +848,28 @@ export function ThinkertoolsMissionsChat() {
     };
   }
 
+  function selectMissionForChat(mission: Mission) {
+    setSelectedMission(mission);
+
+    if (selectedMission?.id === mission.id && currentMode === "quest") {
+      return;
+    }
+
+    enqueueScriptMessages(`mission-${mission.id}-selected`, `Open mission: ${mission.title}`, [
+      mission.definition?.shortDescription ?? "Mission details are available in the case file.",
+    ], [{
+      body: mission.status === "Available"
+        ? "This mission can start from the chat."
+        : "This mission is not available yet.",
+      missionStartPrompt: {
+        missionId: mission.id,
+        title: mission.title,
+        status: mission.status,
+        requirements: mission.requirements,
+      },
+    }]);
+  }
+
   function startQuest(mission: Mission) {
     if (mission.status === "Locked" || !mission.definition) {
       return;
@@ -724,7 +890,7 @@ export function ThinkertoolsMissionsChat() {
       `Stage 1: ${openingStage.title}.`,
       openingStage.objective,
       ...openingStage.guideMessages,
-    ]);
+    ], getMissionStageFollowUps(mission.definition, openingStage));
   }
 
   async function startActivity(skill: Skill, activity: SkillActivity) {
@@ -1134,12 +1300,33 @@ export function ThinkertoolsMissionsChat() {
             </div>
           </header>
 
-          <div className={styles.messageStack}>
+          <div className={styles.messageStack} ref={messageStackRef}>
             {messages.map((message) => {
               const roundTranscript = message.trainingRound;
+              const missionActionSet = message.missionActionSet;
+              const missionFactDigest = message.missionFactDigest;
+              const missionResolutionSet = message.missionResolutionSet;
+              const missionStartPrompt = message.missionStartPrompt;
+              const missionStatementSet = message.missionStatementSet;
               const isActiveRoundMessage = roundTranscript?.interactionId === activeTrainingInteractionId
                 && currentMode === "activity"
                 && !roundTranscript.result;
+              const isActiveMissionActionSet = Boolean(
+                missionActionSet
+                  && currentMode === "quest"
+                  && selectedMissionDefinition?.id === missionActionSet.missionId
+                  && currentQuestStage === missionActionSet.stageId,
+              );
+              const missionForStartPrompt = missionStartPrompt
+                ? missions.find((mission) => mission.id === missionStartPrompt.missionId) ?? null
+                : null;
+              const isStartPromptActive = Boolean(
+                missionStartPrompt
+                  && missionForStartPrompt
+                  && selectedMission?.id === missionStartPrompt.missionId
+                  && currentMode !== "quest"
+                  && missionStartPrompt.status === "Available",
+              );
 
               return (
               <article
@@ -1151,7 +1338,108 @@ export function ThinkertoolsMissionsChat() {
                 <div className={styles.avatar} aria-hidden="true">
                   {message.role === "user" ? "Y" : "M"}
                 </div>
-                {message.questionBank ? (
+                {missionStartPrompt ? (
+                  <section className={styles.missionActionCard} aria-label={`${missionStartPrompt.title} mission start`}>
+                    <div className={styles.missionActionHeader}>
+                      <strong>{missionStartPrompt.title}</strong>
+                      <span>{missionStartPrompt.status}</span>
+                    </div>
+                    <p>{message.body}</p>
+                    <div className={styles.missionRequirementList}>
+                      {missionStartPrompt.requirements.map((requirement) => (
+                        <span key={requirement}>{requirement}</span>
+                      ))}
+                    </div>
+                    <div className={styles.missionChatActions}>
+                      <button
+                        disabled={!isStartPromptActive}
+                        onClick={() => {
+                          if (missionForStartPrompt) {
+                            startQuest(missionForStartPrompt);
+                          }
+                        }}
+                        type="button"
+                      >
+                        {currentMode === "quest" && selectedMission?.id === missionStartPrompt.missionId
+                          ? "Mission in progress"
+                          : "Start Mission"}
+                      </button>
+                    </div>
+                  </section>
+                ) : missionFactDigest ? (
+                  <section className={styles.missionInfoCard} aria-label={missionFactDigest.title}>
+                    <div className={styles.missionInfoHeader}>
+                      <strong>{missionFactDigest.title}</strong>
+                      <span>Case file</span>
+                    </div>
+                    <p>{message.body}</p>
+                    <div className={styles.missionFactList}>
+                      {missionFactDigest.facts.map((fact) => (
+                        <div className={styles.missionFactItem} key={fact.id}>
+                          <strong>{fact.label}</strong>
+                          <p>{fact.body}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                ) : missionStatementSet ? (
+                  <section className={styles.missionInfoCard} aria-label={missionStatementSet.title}>
+                    <div className={styles.missionInfoHeader}>
+                      <strong>{missionStatementSet.title}</strong>
+                      <span>Evidence</span>
+                    </div>
+                    <p>{message.body}</p>
+                    <div className={styles.missionStatementList}>
+                      {missionStatementSet.claims.map((claim) => (
+                        <div className={styles.missionStatementItem} key={claim.id}>
+                          <span>{claim.label}</span>
+                          <div>
+                            <strong>{claim.characterName}</strong>
+                            <p>{missionStatementSet.detail === "statement" ? claim.statement : claim.role}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                ) : missionResolutionSet ? (
+                  <section className={styles.missionInfoCard} aria-label={missionResolutionSet.title}>
+                    <div className={styles.missionInfoHeader}>
+                      <strong>{missionResolutionSet.title}</strong>
+                      <span>Recommendation</span>
+                    </div>
+                    <p>{message.body}</p>
+                    <div className={styles.missionStatementList}>
+                      {missionResolutionSet.options.map((option) => (
+                        <div className={styles.missionStatementItem} key={option.id}>
+                          <span>{option.label}</span>
+                          <div>
+                            <p>{option.body}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                ) : missionActionSet ? (
+                  <section className={styles.missionActionCard} aria-label={`${missionActionSet.stageTitle} actions`}>
+                    <div className={styles.missionActionHeader}>
+                      <strong>{missionActionSet.stageTitle}</strong>
+                      <span>{isActiveMissionActionSet ? "Current" : "Closed"}</span>
+                    </div>
+                    <p>{message.body}</p>
+                    <div className={styles.missionChatActions}>
+                      {missionActionSet.actions.map((action) => (
+                        <button
+                          disabled={!isActiveMissionActionSet}
+                          key={action.id}
+                          onClick={() => handleMissionAction(action)}
+                          type="button"
+                        >
+                          {action.label}
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+                ) : message.questionBank ? (
                   <section className={styles.questionBankDiagram} aria-label="Question bank">
                     <div className={styles.questionBankHeader}>
                       <strong>Question Bank</strong>
@@ -1283,7 +1571,7 @@ export function ThinkertoolsMissionsChat() {
                     selectedMission?.id === mission.id ? styles.selectedMissionItem : ""
                   }`}
                   key={mission.id}
-                  onClick={() => setSelectedMission(mission)}
+                  onClick={() => selectMissionForChat(mission)}
                   type="button"
                 >
                   <strong>{mission.title}</strong>
@@ -1399,30 +1687,6 @@ export function ThinkertoolsMissionsChat() {
                   </section>
                 ) : null}
 
-                {selectedMission.status === "Available" ? (
-                  currentMode === "quest" && selectedMissionDefinition && activeMissionActions.length > 0 ? (
-                    <div className={styles.missionActionList}>
-                      {activeMissionActions.map((action) => (
-                        <button
-                          className={styles.panelActionButton}
-                          key={action.id}
-                          onClick={() => handleMissionAction(action)}
-                          type="button"
-                        >
-                          {action.label}
-                        </button>
-                      ))}
-                    </div>
-                  ) : (
-                    <button
-                      className={styles.panelActionButton}
-                      onClick={() => startQuest(selectedMission)}
-                      type="button"
-                    >
-                      Start Mission
-                    </button>
-                  )
-                ) : null}
               </>
             ) : (
               <p className={styles.emptyDetails}>Click on a mission to open details</p>
