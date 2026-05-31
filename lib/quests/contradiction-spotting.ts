@@ -87,6 +87,14 @@ export function normalizeLabelSelection(labels: unknown[]): string[] {
   return normalized;
 }
 
+export function extractExpectedAnswerCount(roundContent: TrainingActivityRoundContent): 1 | 2 {
+  const n = roundContent.expected_answer_count;
+  if (n === 1 || n === 2) {
+    return n;
+  }
+  return 2;
+}
+
 export function isMatchingLabelPair(selectedLabels: string[], expectedLabels: string[]): boolean {
   if (selectedLabels.length !== expectedLabels.length) {
     return false;

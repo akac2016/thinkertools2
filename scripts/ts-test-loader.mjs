@@ -1,8 +1,36 @@
 import { readFile } from "node:fs/promises";
-import { pathToFileURL } from "node:url";
+import { pathToFileURL, fileURLToPath } from "node:url";
+import { resolve as resolvePath } from "node:path";
 
 const tsPath = `${process.cwd()}/node_modules/typescript/lib/typescript.js`;
 const ts = await import(pathToFileURL(tsPath).href);
+
+// Resolve @/ path aliases to the workspace root (mirrors tsconfig paths: { "@/*": ["./*"] })
+const workspaceRoot = process.cwd();
+
+export async function resolve(specifier, context, defaultResolve) {
+  if (specifier.startsWith("@/")) {
+    const relativePath = specifier.slice(2); // strip "@/"
+    const absolutePath = resolvePath(workspaceRoot, relativePath);
+
+    // Try the path as-is first (may already have .ts extension)
+    try {
+      const directUrl = pathToFileURL(absolutePath).href;
+      return await defaultResolve(directUrl, context, defaultResolve);
+    } catch {
+      // Fall through to try with .ts extension
+    }
+
+    // Try appending .ts
+    try {
+      const tsUrl = pathToFileURL(absolutePath + ".ts").href;
+      return await defaultResolve(tsUrl, context, defaultResolve);
+    } catch {
+      // Fall through to default resolution
+    }
+  }
+  return defaultResolve(specifier, context, defaultResolve);
+}
 
 export async function load(url, context, defaultLoad) {
   if (url.endsWith(".ts")) {

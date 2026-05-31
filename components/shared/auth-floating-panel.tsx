@@ -9,7 +9,7 @@ import { AuthPanel } from "@/components/shared/auth-panel";
 export function AuthFloatingPanel() {
   const pathname = usePathname();
 
-  if (pathname === "/" || pathname === "/thinkertool-missions") {
+  if (pathname === "/") {
     return null;
   }
 

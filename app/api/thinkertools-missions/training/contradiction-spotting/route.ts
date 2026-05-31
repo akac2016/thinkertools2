@@ -6,6 +6,7 @@ import { supabaseAdmin } from "@/lib/supabase/admin";
 import {
   ACTIVE_TRAINING_SLUG,
   TRAINING_ACTIVITY_CONTENT_TYPE,
+  extractExpectedAnswerCount,
   extractPromptClaims,
   extractQuestionText,
   extractRoundTypeTag,
@@ -112,6 +113,7 @@ export async function GET(request: Request) {
       roundType: extractRoundTypeTag(activity.round_content),
       questionText: extractQuestionText(activity.round_content),
       promptClaims: extractPromptClaims(activity.round_content),
+      expectedAnswerCount: extractExpectedAnswerCount(activity.round_content),
     }));
 
     const activitySlugById = new Map(rounds.map((round) => [round.id, round.slug]));

@@ -1,0 +1,204 @@
+.kanePlayer {
+  border: 1px solid #2a2a3a;
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: #0f0f1a;
+  font-size: 13px;
+  color: #c8c8d8;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.badge {
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  color: #a78bfa;
+}
+
+.description {
+  margin: 0;
+  color: #888;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.statusLine {
+  margin: 0;
+  color: #888;
+  font-size: 12px;
+  font-style: italic;
+}
+
+.attachLine {
+  margin: 0;
+  font-size: 11px;
+  color: #a78bfa;
+}
+
+/* Buttons */
+.startButton,
+.stopButton,
+.resetButton {
+  border: none;
+  border-radius: 5px;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.startButton {
+  background: #7c3aed;
+  color: #fff;
+  flex: 1;
+}
+
+.startButton:hover {
+  opacity: 0.85;
+}
+
+.missionButton {
+  background: #1d4ed8;
+}
+
+.phaseButtons {
+  display: flex;
+  gap: 6px;
+}
+
+.stopButton {
+  background: #3f3f50;
+  color: #e0e0e0;
+}
+
+.stopButton:hover {
+  opacity: 0.8;
+}
+
+.resetButton {
+  background: #1e1e2e;
+  color: #a0a0b8;
+  border: 1px solid #2a2a3a;
+}
+
+.resetButton:hover {
+  opacity: 0.8;
+}
+
+/* Step list */
+.stepList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.step {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.stepIcon {
+  flex-shrink: 0;
+  width: 14px;
+  font-size: 11px;
+  margin-top: 1px;
+}
+
+.stepRemark {
+  color: #b0b0c8;
+}
+
+.stepPassed .stepIcon {
+  color: #4ade80;
+}
+
+.stepFailed .stepIcon {
+  color: #f87171;
+}
+
+.stepFailed .stepRemark {
+  color: #f87171;
+}
+
+.stepPending .stepIcon,
+.stepPending .stepRemark {
+  color: #6b6b88;
+  font-style: italic;
+}
+
+/* Result */
+.result {
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.result strong {
+  font-size: 13px;
+}
+
+.result p {
+  margin: 0;
+  font-size: 12px;
+  color: #b0b0c8;
+  line-height: 1.4;
+}
+
+.resultPassed {
+  background: #0d2b1a;
+  border: 1px solid #166534;
+}
+
+.resultFailed {
+  background: #2b0d0d;
+  border: 1px solid #7f1d1d;
+}
+
+.duration {
+  font-size: 11px;
+  color: #666;
+  margin-top: 2px;
+}
+
+/* Error */
+.errorBox {
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: #1f1010;
+  border: 1px solid #7f1d1d;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.errorBox strong {
+  font-size: 12px;
+  color: #fca5a5;
+}
+
+.errorBox p {
+  margin: 0;
+  font-size: 12px;
+  color: #b0b0c8;
+  line-height: 1.4;
+}

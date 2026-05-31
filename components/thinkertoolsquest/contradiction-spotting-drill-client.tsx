@@ -22,6 +22,7 @@ type ContradictionRound = {
   roundType: string;
   questionText: string;
   promptClaims: RoundPromptClaim[];
+  expectedAnswerCount: 1 | 2;
 };
 
 type ProgressState = {
@@ -602,13 +603,19 @@ export function ContradictionSpottingDrillClient() {
 
     setRecoverableInputError(null);
 
+    const expectedCount = activeRound?.expectedAnswerCount ?? 2;
+
     setSelectedLabels((current) => {
       if (current.includes(label)) {
         return current.filter((item) => item !== label);
       }
 
-      if (current.length < 2) {
+      if (current.length < expectedCount) {
         return [...current, label];
+      }
+
+      if (expectedCount === 1) {
+        return [label];
       }
 
       return [current[1], label];
@@ -1009,7 +1016,11 @@ export function ContradictionSpottingDrillClient() {
 
                       {canShowRoundQuestion ? (
                         <ChatRow tone="system" speaker="System" side="left">
-                          <p>Select two options, then confirm your pair.</p>
+                          <p>
+                            {activeRound.expectedAnswerCount === 1
+                              ? "Select one option, then confirm your answer."
+                              : "Select two options, then confirm your pair."}
+                          </p>
                           <p className="text-xs text-emerald-800">{activeRound.shortDescription}</p>
                           <p className="text-xs text-emerald-800">
                             Reward on success: +{activeRound.xpReward} XP • Suggested level: {activeRound.recommendedLevelMin}-{activeRound.recommendedLevelMax} • {formatDifficulty(activeRound.difficultyLabel)}

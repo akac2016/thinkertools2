@@ -603,10 +603,24 @@
   background: #f6f8fb;
   border: 1px solid rgba(32, 48, 74, 0.12);
   border-radius: 8px;
+  color: inherit;
+  cursor: pointer;
   display: grid;
+  font: inherit;
   gap: 8px;
   grid-template-columns: 28px 1fr;
   padding: 10px;
+  text-align: left;
+  width: 100%;
+}
+
+.missionStatementItem:disabled {
+  cursor: default;
+}
+
+.missionStatementItem:hover:not(:disabled) {
+  background: #eef3f8;
+  border-color: rgba(32, 48, 74, 0.34);
 }
 
 .missionStatementItem span {
@@ -1056,6 +1070,13 @@
   margin: 0;
 }
 
+.claimsBlock > p {
+  color: #394358;
+  font-size: 13px;
+  line-height: 1.45;
+  margin: 0;
+}
+
 .requirementsBlock ul,
 .factsBlock ul {
   display: grid;
@@ -1088,10 +1109,26 @@
   background: #f6f8fb;
   border: 1px solid rgba(32, 48, 74, 0.12);
   border-radius: 8px;
+  color: inherit;
+  cursor: pointer;
   display: grid;
+  font: inherit;
   gap: 8px;
   grid-template-columns: 28px 1fr;
   padding: 10px;
+  text-align: left;
+  width: 100%;
+}
+
+.claimSummaryItem:disabled,
+.resolutionItem:disabled {
+  cursor: default;
+}
+
+.claimSummaryItem:hover:not(:disabled),
+.resolutionItem:hover:not(:disabled) {
+  background: #eef3f8;
+  border-color: rgba(32, 48, 74, 0.34);
 }
 
 .claimSummaryItem span,
@@ -1121,6 +1158,23 @@
   font-size: 13px;
   line-height: 1.4;
   margin: 0;
+}
+
+.selectedMissionChoice {
+  background: #fff3f1;
+  border-color: rgba(180, 59, 50, 0.52);
+}
+
+.selectedMissionChoice span {
+  background: #b43b32;
+}
+
+.correctMissionChoice {
+  border-color: rgba(31, 122, 84, 0.5);
+}
+
+.correctMissionChoice span {
+  background: #1f7a54;
 }
 
 .activityList {

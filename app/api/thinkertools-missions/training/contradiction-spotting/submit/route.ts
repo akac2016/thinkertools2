@@ -12,6 +12,7 @@ import {
   applyEarnedXp,
   computeCompletionRewardXp,
   extractCorrectAnswerLabels,
+  extractExpectedAnswerCount,
   extractExplanation,
   extractPromptClaims,
   extractQuestionText,
@@ -101,8 +102,9 @@ export async function POST(request: Request) {
     const promptClaims = extractPromptClaims(activityData.round_content);
     const visibleLabels = promptClaims.map((claim) => claim.label);
     const correctAnswerLabels = extractCorrectAnswerLabels(activityData.round_content);
+    const expectedCount = extractExpectedAnswerCount(activityData.round_content);
 
-    if (visibleLabels.length < 2 || correctAnswerLabels.length !== 2) {
+    if (visibleLabels.length < expectedCount || correctAnswerLabels.length !== expectedCount) {
       return jsonError("Contradiction round is misconfigured", {
         status: 500,
         code: "MISSIONS_ACTIVITY_CONFIG_INVALID",
@@ -111,6 +113,22 @@ export async function POST(request: Request) {
 
     const clickSelection = normalizeLabelSelection(parsedBody.data.selectedLabels ?? []);
     const typedAnswer = (parsedBody.data.typedAnswer ?? "").trim();
+
+    // If the caller submitted a label selection with the wrong count, reject early.
+    if (
+      parsedBody.data.selectedLabels !== undefined
+      && parsedBody.data.selectedLabels.length > 0
+      && parsedBody.data.selectedLabels.length !== expectedCount
+    ) {
+      return jsonError(RECOVERABLE_INVALID_INPUT_MESSAGE, {
+        status: 422,
+        code: "MISSIONS_SELECTION_REQUIRED",
+        details: {
+          reason: "wrong_selection_count",
+          recoverable: true,
+        },
+      });
+    }
 
     let resolvedSelection: string[] | null = null;
     let inputMode: "click" | "typed" = "click";
@@ -121,7 +139,7 @@ export async function POST(request: Request) {
         }
       | null = null;
 
-    const clickSelectionIsValid = clickSelection.length === 2
+    const clickSelectionIsValid = clickSelection.length === expectedCount
       && clickSelection.every((label) => visibleLabels.includes(label));
 
     if (clickSelectionIsValid) {
@@ -130,7 +148,7 @@ export async function POST(request: Request) {
     } else if (typedAnswer) {
       const typedMatch = matchConstrainedTypedInput(typedAnswer, {
         visibleOptionLabels: visibleLabels,
-        expectedSelectionCount: 2,
+        expectedSelectionCount: expectedCount,
       });
 
       if (typedMatch.status === "invalid_input") {
@@ -162,7 +180,7 @@ export async function POST(request: Request) {
       });
     }
 
-    if (!resolvedSelection || resolvedSelection.length !== 2) {
+    if (!resolvedSelection || resolvedSelection.length !== expectedCount) {
       return jsonError(RECOVERABLE_INVALID_INPUT_MESSAGE, {
         status: 422,
         code: "MISSIONS_SELECTION_REQUIRED",

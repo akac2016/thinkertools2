@@ -34,6 +34,13 @@ User accounts are powered by Supabase Auth (email/password).
 Authenticated API requests send a Supabase bearer token automatically from the client.
 Server routes resolve the actor from this token and sync a matching row in `public.users`.
 
+## Thinkertools Missions
+
+/Thinkertools-missions is an experience rooted in users training different skills via activities and missions. 
+
+the activities are drills to practice the training and improve their levels. the missions are story/plot-driven way to advance the training levels for the user and advance in the storyline. 
+
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:

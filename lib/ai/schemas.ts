@@ -31,6 +31,8 @@ export const aiFeatureSchema = z.enum([
   "template_generation",
   "turn_assist",
   "summary",
+  "authoring_activity",
+  "authoring_mission",
 ]);
 
 export type AiFeature = z.infer<typeof aiFeatureSchema>;
