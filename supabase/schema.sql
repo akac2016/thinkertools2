@@ -412,7 +412,14 @@ create table if not exists public.ai_runs (
   id uuid primary key default gen_random_uuid(),
   request_id uuid,
   feature text not null
-    check (feature in ('template_generation', 'turn_assist', 'summary', 'other')),
+    check (feature in (
+      'template_generation',
+      'turn_assist',
+      'summary',
+      'other',
+      'authoring_activity',
+      'authoring_mission'
+    )),
   model text not null,
   status text not null check (status in ('success', 'error')),
   input_tokens integer check (input_tokens is null or input_tokens >= 0),
@@ -433,3 +440,163 @@ create index if not exists idx_ai_runs_status_created
 
 create index if not exists idx_ai_runs_request
   on public.ai_runs(request_id);
+
+-- ----------
+-- ThinkerTools Missions domain
+-- ----------
+-- Reconstructed from the migration history (originally the "quests" domain,
+-- renamed to trainings/missions). These tables live only in migrations; this
+-- block mirrors their CURRENT post-migration shape for posterity. They are
+-- accessed exclusively through the service_role admin client.
+create table if not exists public.trainings (
+  id uuid primary key default gen_random_uuid(),
+  slug text not null unique,
+  title text not null,
+  description text not null default '',
+  max_level integer not null default 20 check (max_level = 20),
+  is_active boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.training_activity_groups (
+  id uuid primary key default gen_random_uuid(),
+  slug text not null unique,
+  title text not null,
+  description text not null default '',
+  training_id uuid not null references public.trainings(id) on delete restrict,
+  template_family text not null default '',
+  display_order integer not null default 0,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_training_activity_groups_training
+  on public.training_activity_groups(training_id, display_order);
+
+create table if not exists public.training_activities (
+  id uuid primary key default gen_random_uuid(),
+  slug text not null unique,
+  title text not null,
+  primary_training_id uuid not null references public.trainings(id) on delete restrict,
+  content_type text not null default 'activity' check (content_type = 'activity'),
+  template_family text not null,
+  short_description text not null default '',
+  difficulty_label text not null default 'intro',
+  completion_criteria text not null default '',
+  xp_reward integer not null check (xp_reward >= 0),
+  recommended_level_min integer not null check (recommended_level_min >= 1 and recommended_level_min <= 20),
+  recommended_level_max integer not null check (recommended_level_max >= 1 and recommended_level_max <= 20),
+  overlevel_grace_levels integer not null default 2 check (overlevel_grace_levels = 2),
+  repeatable boolean not null default true,
+  is_active boolean not null default true,
+  round_content jsonb not null default '{}'::jsonb,
+  activity_group_id uuid references public.training_activity_groups(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  check (recommended_level_min <= recommended_level_max)
+);
+
+create index if not exists idx_training_activities_training_level
+  on public.training_activities(primary_training_id, recommended_level_min, recommended_level_max);
+
+create index if not exists idx_training_activities_group
+  on public.training_activities(activity_group_id);
+
+create table if not exists public.missions (
+  id uuid primary key default gen_random_uuid(),
+  slug text not null unique,
+  title text not null,
+  primary_training_id uuid not null references public.trainings(id) on delete restrict,
+  secondary_training_ids uuid[] not null default '{}',
+  content_type text not null default 'mission' check (content_type = 'mission'),
+  narrative_hook text not null default '',
+  short_description text not null default '',
+  difficulty_label text not null default 'intro',
+  required_training_level integer not null default 1 check (required_training_level >= 1 and required_training_level <= 20),
+  prerequisite_training_activity_ids uuid[] not null default '{}',
+  prerequisite_mission_ids uuid[] not null default '{}',
+  completion_criteria text not null default '',
+  xp_reward integer not null check (xp_reward >= 0),
+  rewards_metadata jsonb not null default '{}'::jsonb,
+  mission_body jsonb not null default '{}'::jsonb,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_missions_training_required_level
+  on public.missions(primary_training_id, required_training_level);
+
+create table if not exists public.user_training_progress (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.users(id) on delete cascade,
+  training_id uuid not null references public.trainings(id) on delete cascade,
+  current_level integer not null default 1 check (current_level >= 1 and current_level <= 20),
+  current_level_xp integer not null default 0 check (current_level_xp >= 0),
+  total_xp integer not null default 0 check (total_xp >= 0),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (user_id, training_id)
+);
+
+create index if not exists idx_user_training_progress_user
+  on public.user_training_progress(user_id);
+
+create table if not exists public.training_activity_attempts (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.users(id) on delete cascade,
+  training_id uuid not null references public.trainings(id) on delete restrict,
+  training_activity_id uuid not null references public.training_activities(id) on delete restrict,
+  content_type text not null default 'activity' check (content_type = 'activity'),
+  was_successful boolean not null default true,
+  awarded_xp integer not null default 0 check (awarded_xp >= 0),
+  completion_metadata jsonb not null default '{}'::jsonb,
+  completed_at timestamptz not null default now()
+);
+
+create index if not exists idx_training_activity_attempts_user_completed
+  on public.training_activity_attempts(user_id, completed_at desc);
+
+create table if not exists public.mission_completions (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.users(id) on delete cascade,
+  training_id uuid not null references public.trainings(id) on delete restrict,
+  mission_id uuid not null references public.missions(id) on delete restrict,
+  content_type text not null default 'mission' check (content_type = 'mission'),
+  awarded_xp integer not null default 0 check (awarded_xp >= 0),
+  completion_metadata jsonb not null default '{}'::jsonb,
+  completed_at timestamptz not null default now(),
+  unique (user_id, mission_id)
+);
+
+create index if not exists idx_mission_completions_user_completed
+  on public.mission_completions(user_id, completed_at desc);
+
+create table if not exists public.content_drafts (
+  id uuid primary key default gen_random_uuid(),
+  content_type text not null check (content_type in ('activity','mission')),
+  status text not null default 'draft'
+    check (status in ('draft','valid','published','archived')),
+  origin text not null default 'manual'
+    check (origin in ('manual','ai','co_authored')),
+  primary_training_id uuid not null references public.trainings(id) on delete restrict,
+  title text not null default '',
+  slug text,
+  body jsonb not null default '{}'::jsonb,
+  validation_issues jsonb not null default '[]'::jsonb,
+  ai_source text,
+  ai_model text,
+  published_ref_id uuid,
+  activity_group_id uuid references public.training_activity_groups(id) on delete set null,
+  created_by uuid references public.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_content_drafts_creator_updated
+  on public.content_drafts(created_by, updated_at desc);
+
+create index if not exists idx_content_drafts_group
+  on public.content_drafts(activity_group_id);

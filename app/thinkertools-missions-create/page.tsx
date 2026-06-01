@@ -339,8 +339,10 @@ export default function MissionsCreatePage() {
         {selectedTraining ? (
           <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
             <div className="flex items-center gap-2">
+              <button type="button" onClick={() => { setSelectedTraining(null); setSelectedContentType(null); setSelectedGroup(null); setStep("subject"); setMessages([]); }} className="flex h-6 w-6 items-center justify-center rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-600" aria-label="Go back">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4"><path fillRule="evenodd" d="M17 10a.75.75 0 00-.75-.75H5.612l4.158-3.96a.75.75 0 10-1.04-1.08l-5.5 5.25a.75.75 0 000 1.08l5.5 5.25a.75.75 0 101.04-1.08L5.612 10.75H16.25A.75.75 0 0017 10z" clipRule="evenodd" /></svg>
+              </button>
               <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">{selectedTraining.title}</span>
-              <button type="button" onClick={() => { setSelectedTraining(null); setSelectedContentType(null); setSelectedGroup(null); setStep("subject"); setMessages([]); }} className="text-xs text-slate-400 hover:text-slate-600">Change</button>
             </div>
             <div className="flex rounded-lg border border-slate-200 bg-slate-50 p-0.5">
               <button type="button" onClick={() => setView("chat")} className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${view === "chat" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>AI Chat</button>

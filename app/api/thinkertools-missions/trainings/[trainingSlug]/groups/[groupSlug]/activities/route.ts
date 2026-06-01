@@ -1,10 +1,8 @@
 import "server-only";
 
-import { jsonError, jsonSuccess } from "@/lib/http";
 import { requireActorIdFromRequest } from "@/lib/auth/actor";
-import { supabaseAdmin } from "@/lib/supabase/admin";
+import { jsonError, jsonSuccess } from "@/lib/http";
 import {
-  ACTIVE_TRAINING_SLUG,
   TRAINING_ACTIVITY_CONTENT_TYPE,
   extractExpectedAnswerCount,
   extractPromptClaims,
@@ -12,12 +10,12 @@ import {
   extractRoundTypeTag,
   getXpRequiredForNextLevel,
   type TrainingActivityRow,
-  type TrainingRow,
 } from "@/lib/quests";
 import {
   getActiveTrainingBySlug,
   getOrCreateUserTrainingProgress,
 } from "@/lib/quests/server-progress";
+import { supabaseAdmin } from "@/lib/supabase/admin";
 
 const ACTIVITY_SELECT = [
   "id",
@@ -31,18 +29,52 @@ const ACTIVITY_SELECT = [
   "round_content",
 ].join(",");
 
-export async function GET(request: Request) {
+export async function GET(
+  request: Request,
+  { params }: { params: Promise<{ trainingSlug: string; groupSlug: string }> },
+) {
   try {
     const actor = await requireActorIdFromRequest(request);
     if (!actor.ok) {
       return actor.response;
     }
 
-    const training = await getActiveTrainingBySlug(ACTIVE_TRAINING_SLUG);
+    const { trainingSlug, groupSlug } = await params;
+
+    // 1. Resolve the active training by slug
+    const training = await getActiveTrainingBySlug(trainingSlug);
     if (!training.ok) {
       return training.response;
     }
 
+    // 2. Resolve the active group by slug within this training
+    const groupResult = await supabaseAdmin
+      .from("training_activity_groups")
+      .select("id,slug,training_id,is_active")
+      .eq("slug", groupSlug)
+      .eq("training_id", training.data.id)
+      .eq("is_active", true)
+      .maybeSingle();
+
+    if (groupResult.error) {
+      return jsonError("Failed to load activity group", {
+        status: 500,
+        code: "MISSIONS_ACTIVITY_GROUP_LOAD_FAILED",
+        details: {
+          dbCode: groupResult.error.code ?? null,
+          dbMessage: groupResult.error.message,
+        },
+      });
+    }
+
+    if (!groupResult.data) {
+      return jsonError("Activity group not found", {
+        status: 404,
+        code: "MISSIONS_ACTIVITY_GROUP_NOT_FOUND",
+      });
+    }
+
+    // 3. Initialize/resolve progress for the training
     const progress = await getOrCreateUserTrainingProgress({
       userId: actor.actorId,
       trainingId: training.data.id,
@@ -52,27 +84,11 @@ export async function GET(request: Request) {
       return progress.response;
     }
 
-    const trainingsResult = await supabaseAdmin
-      .from("trainings")
-      .select("id,slug,title,max_level,is_active")
-      .order("created_at", { ascending: true })
-      .returns<Pick<TrainingRow, "id" | "slug" | "title" | "max_level" | "is_active">[]>();
-
-    if (trainingsResult.error) {
-      return jsonError("Failed to load training catalog", {
-        status: 500,
-        code: "MISSIONS_TRAINING_CATALOG_LOAD_FAILED",
-        details: {
-          dbCode: trainingsResult.error.code ?? null,
-          dbMessage: trainingsResult.error.message,
-        },
-      });
-    }
-
+    // 4. Query activities scoped to this group
     const activitiesResult = await supabaseAdmin
       .from("training_activities")
       .select(ACTIVITY_SELECT)
-      .eq("primary_training_id", training.data.id)
+      .eq("activity_group_id", groupResult.data.id)
       .eq("content_type", TRAINING_ACTIVITY_CONTENT_TYPE)
       .eq("is_active", true)
       .order("recommended_level_min", { ascending: true })
@@ -91,7 +107,7 @@ export async function GET(request: Request) {
       >[]>();
 
     if (activitiesResult.error) {
-      return jsonError("Failed to load contradiction rounds", {
+      return jsonError("Failed to load activities", {
         status: 500,
         code: "MISSIONS_ACTIVITY_LOAD_FAILED",
         details: {
@@ -101,6 +117,7 @@ export async function GET(request: Request) {
       });
     }
 
+    // 5. Extract rounds (same logic as the legacy route)
     const rounds = (activitiesResult.data ?? []).map((activity) => ({
       id: activity.id,
       slug: activity.slug,
@@ -116,6 +133,7 @@ export async function GET(request: Request) {
       expectedAnswerCount: extractExpectedAnswerCount(activity.round_content),
     }));
 
+    // 6. Resolve completed round slugs
     const activitySlugById = new Map(rounds.map((round) => [round.id, round.slug]));
     let completedRoundSlugs: string[] = [];
 
@@ -130,7 +148,7 @@ export async function GET(request: Request) {
         .in("training_activity_id", rounds.map((round) => round.id));
 
       if (completedAttemptsResult.error) {
-        return jsonError("Failed to load completed contradiction rounds", {
+        return jsonError("Failed to load completed rounds", {
           status: 500,
           code: "MISSIONS_COMPLETED_ROUNDS_LOAD_FAILED",
           details: {
@@ -151,6 +169,7 @@ export async function GET(request: Request) {
 
     const xpRequiredForNextLevel = getXpRequiredForNextLevel(progress.data.current_level);
 
+    // Return the same shape as the legacy route minus trainingCatalog
     return jsonSuccess({
       training: {
         id: training.data.id,
@@ -166,18 +185,11 @@ export async function GET(request: Request) {
           ? Math.max(0, xpRequiredForNextLevel - progress.data.current_level_xp)
           : 0,
       },
-      trainingCatalog: (trainingsResult.data ?? []).map((entry) => ({
-        id: entry.id,
-        slug: entry.slug,
-        title: entry.title,
-        maxLevel: entry.max_level,
-        isActive: entry.is_active,
-      })),
       rounds,
       completedRoundSlugs,
     });
   } catch (error) {
-    return jsonError("Unexpected error while loading contradiction rounds", {
+    return jsonError("Unexpected error while loading activities", {
       status: 500,
       code: "MISSIONS_ROUNDS_UNEXPECTED",
       details: {

@@ -6,7 +6,6 @@ import { parseBody } from "@/lib/api/route-utils";
 import { requireActorIdFromRequest } from "@/lib/auth/actor";
 import { jsonError, jsonSuccess } from "@/lib/http";
 import {
-  ACTIVE_TRAINING_SLUG,
   TRAINING_ACTIVITY_CONTENT_TYPE,
   RECOVERABLE_INVALID_INPUT_MESSAGE,
   applyEarnedXp,
@@ -45,8 +44,14 @@ const ACTIVITY_SELECT = [
   "round_content",
 ].join(",");
 
-export async function POST(request: Request) {
+type RouteContext = {
+  params: Promise<{ trainingSlug: string; groupSlug: string }>;
+};
+
+export async function POST(request: Request, context: RouteContext) {
   try {
+    const { trainingSlug, groupSlug } = await context.params;
+
     const actor = await requireActorIdFromRequest(request);
     if (!actor.ok) {
       return actor.response;
@@ -57,16 +62,46 @@ export async function POST(request: Request) {
       return parsedBody.response;
     }
 
-    const training = await getActiveTrainingBySlug(ACTIVE_TRAINING_SLUG);
+    // Resolve the training from the [trainingSlug] path segment (NOT hardcoded)
+    const training = await getActiveTrainingBySlug(trainingSlug);
     if (!training.ok) {
       return training.response;
     }
 
+    // Resolve the group from [groupSlug] within the training
+    const groupResult = await supabaseAdmin
+      .from("training_activity_groups")
+      .select("id")
+      .eq("slug", groupSlug)
+      .eq("training_id", training.data.id)
+      .eq("is_active", true)
+      .maybeSingle();
+
+    if (groupResult.error) {
+      return jsonError("Failed to load activity group", {
+        status: 500,
+        code: "MISSIONS_ACTIVITY_GROUP_LOAD_FAILED",
+        details: {
+          dbCode: groupResult.error.code ?? null,
+          dbMessage: groupResult.error.message,
+        },
+      });
+    }
+
+    if (!groupResult.data) {
+      return jsonError("Activity group not found", {
+        status: 404,
+        code: "MISSIONS_ACTIVITY_GROUP_NOT_FOUND",
+      });
+    }
+
+    // Load the activity scoped to the resolved group
     const activityResult = await supabaseAdmin
       .from("training_activities")
       .select(ACTIVITY_SELECT)
       .eq("slug", parsedBody.data.activitySlug)
       .eq("primary_training_id", training.data.id)
+      .eq("activity_group_id", groupResult.data.id)
       .eq("content_type", TRAINING_ACTIVITY_CONTENT_TYPE)
       .eq("is_active", true)
       .maybeSingle();

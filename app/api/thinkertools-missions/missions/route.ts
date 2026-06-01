@@ -2,32 +2,21 @@ import "server-only";
 
 import { requireActorIdFromRequest } from "@/lib/auth/actor";
 import { jsonError, jsonSuccess } from "@/lib/http";
-import { wrongRecruitMission } from "@/lib/missions";
-import { upsertMissionCatalogEntry } from "@/lib/missions/server";
-import { getXpRequiredForNextLevel, type MissionCompletionRow } from "@/lib/quests";
+import { ACTIVE_TRAINING_SLUG, getXpRequiredForNextLevel } from "@/lib/quests";
+import {
+  filterAndOrderActiveMissions,
+  mergeMissionsWithCompletions,
+  type RawCompletionRow,
+  type RawMissionRow,
+} from "@/lib/quests/missions-query";
 import {
   getActiveTrainingBySlug,
   getOrCreateUserTrainingProgress,
 } from "@/lib/quests/server-progress";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 
-const COMPLETION_SELECT = [
-  "id",
-  "user_id",
-  "training_id",
-  "mission_id",
-  "content_type",
-  "awarded_xp",
-  "completion_metadata",
-  "completed_at",
-].join(",");
-
-function getReplayCount(metadata: Record<string, unknown> | null | undefined): number {
-  const replayCount = metadata?.replay_count;
-  return typeof replayCount === "number" && Number.isFinite(replayCount)
-    ? Math.max(0, replayCount)
-    : 0;
-}
+const MISSION_LIST_SELECT = "id,slug,title,xp_reward,is_active";
+const COMPLETION_LIST_SELECT = "mission_id,awarded_xp,completion_metadata,completed_at";
 
 export async function GET(request: Request) {
   try {
@@ -36,17 +25,10 @@ export async function GET(request: Request) {
       return actor.response;
     }
 
-    const training = await getActiveTrainingBySlug(wrongRecruitMission.trainingSlug);
+    // Load active training for progress payload (kept for backward compat)
+    const training = await getActiveTrainingBySlug(ACTIVE_TRAINING_SLUG);
     if (!training.ok) {
       return training.response;
-    }
-
-    const mission = await upsertMissionCatalogEntry({
-      definition: wrongRecruitMission,
-      trainingId: training.data.id,
-    });
-    if (!mission.ok) {
-      return mission.response;
     }
 
     const progress = await getOrCreateUserTrainingProgress({
@@ -57,34 +39,69 @@ export async function GET(request: Request) {
       return progress.response;
     }
 
-    const completionResult = await supabaseAdmin
-      .from("mission_completions")
-      .select(COMPLETION_SELECT)
-      .eq("user_id", actor.actorId)
-      .eq("mission_id", mission.data.id)
-      .maybeSingle();
+    // Query all active missions ordered by slug ascending
+    const missionsResult = await supabaseAdmin
+      .from("missions")
+      .select(MISSION_LIST_SELECT)
+      .eq("is_active", true)
+      .order("slug", { ascending: true })
+      .returns<RawMissionRow[]>();
 
-    if (completionResult.error) {
-      return jsonError("Failed to load mission completion", {
+    if (missionsResult.error) {
+      return jsonError("Failed to load missions", {
         status: 500,
-        code: "MISSIONS_COMPLETION_LOAD_FAILED",
+        code: "MISSIONS_LIST_LOAD_FAILED",
         details: {
-          dbCode: completionResult.error.code ?? null,
-          dbMessage: completionResult.error.message,
+          dbCode: missionsResult.error.code ?? null,
+          dbMessage: missionsResult.error.message,
         },
       });
     }
 
-    const completion = completionResult.data as Pick<MissionCompletionRow,
-      | "id"
-      | "user_id"
-      | "training_id"
-      | "mission_id"
-      | "content_type"
-      | "awarded_xp"
-      | "completion_metadata"
-      | "completed_at"
-    > | null;
+    const activeMissions = filterAndOrderActiveMissions(missionsResult.data ?? []);
+
+    // Zero active missions → return empty list with progress
+    if (activeMissions.length === 0) {
+      const xpRequiredForNextLevel = getXpRequiredForNextLevel(progress.data.current_level);
+      return jsonSuccess({
+        progress: {
+          currentLevel: progress.data.current_level,
+          currentLevelXp: progress.data.current_level_xp,
+          totalXp: progress.data.total_xp,
+          xpRequiredForNextLevel,
+          xpRemainingForNextLevel: xpRequiredForNextLevel > 0
+            ? Math.max(0, xpRequiredForNextLevel - progress.data.current_level_xp)
+            : 0,
+        },
+        missions: [],
+      });
+    }
+
+    // Load per-user completions for all active missions in a single query
+    const missionIds = activeMissions.map((m) => m.id);
+    const completionsResult = await supabaseAdmin
+      .from("mission_completions")
+      .select(COMPLETION_LIST_SELECT)
+      .eq("user_id", actor.actorId)
+      .in("mission_id", missionIds)
+      .returns<RawCompletionRow[]>();
+
+    if (completionsResult.error) {
+      return jsonError("Failed to load missions", {
+        status: 500,
+        code: "MISSIONS_LIST_LOAD_FAILED",
+        details: {
+          dbCode: completionsResult.error.code ?? null,
+          dbMessage: completionsResult.error.message,
+        },
+      });
+    }
+
+    const missions = mergeMissionsWithCompletions(
+      activeMissions,
+      completionsResult.data ?? [],
+    );
+
     const xpRequiredForNextLevel = getXpRequiredForNextLevel(progress.data.current_level);
 
     return jsonSuccess({
@@ -97,23 +114,12 @@ export async function GET(request: Request) {
           ? Math.max(0, xpRequiredForNextLevel - progress.data.current_level_xp)
           : 0,
       },
-      missions: [{
-        id: mission.data.id,
-        slug: mission.data.slug,
-        title: mission.data.title,
-        xpReward: mission.data.xp_reward,
-        isActive: mission.data.is_active,
-        isCompleted: Boolean(completion),
-        completedAt: completion?.completed_at ?? null,
-        awardedXp: completion?.awarded_xp ?? 0,
-        replayCount: getReplayCount(completion?.completion_metadata),
-        canReplay: true,
-      }],
+      missions,
     });
   } catch (error) {
-    return jsonError("Unexpected error while loading missions", {
+    return jsonError("Failed to load missions", {
       status: 500,
-      code: "MISSIONS_LOAD_UNEXPECTED",
+      code: "MISSIONS_LIST_LOAD_FAILED",
       details: {
         reason: error instanceof Error ? error.message : "Unknown error",
       },
