@@ -6,14 +6,14 @@ import { parseBody, unexpectedError } from "@/lib/api/route-utils";
 import { requireActorIdFromRequest } from "@/lib/auth/actor";
 import { createDraft, listDraftsByCreator, updateDraft } from "@/lib/authoring/server";
 import { validateDraft } from "@/lib/authoring/validation";
-import { jsonError, jsonSuccess } from "@/lib/http";
+import { jsonSuccess } from "@/lib/http";
 
 const createDraftBodySchema = z.object({
   contentType: z.enum(["activity", "mission"]),
   primaryTrainingId: z.string().uuid(),
   activityGroupId: z.string().uuid().nullable().optional(),
   title: z.string().trim().max(300).optional(),
-  body: z.record(z.unknown()).optional(),
+  body: z.record(z.string(), z.unknown()).optional(),
   slug: z.string().trim().min(1).max(200).nullable().optional(),
 });
 

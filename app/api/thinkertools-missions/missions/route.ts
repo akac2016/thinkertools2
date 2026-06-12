@@ -15,7 +15,7 @@ import {
 } from "@/lib/quests/server-progress";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 
-const MISSION_LIST_SELECT = "id,slug,title,xp_reward,is_active";
+const MISSION_LIST_SELECT = "id,slug,title,xp_reward,publication_status";
 const COMPLETION_LIST_SELECT = "mission_id,awarded_xp,completion_metadata,completed_at";
 
 export async function GET(request: Request) {
@@ -43,7 +43,7 @@ export async function GET(request: Request) {
     const missionsResult = await supabaseAdmin
       .from("missions")
       .select(MISSION_LIST_SELECT)
-      .eq("is_active", true)
+      .eq("publication_status", "live")
       .order("slug", { ascending: true })
       .returns<RawMissionRow[]>();
 

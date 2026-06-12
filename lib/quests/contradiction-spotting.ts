@@ -106,7 +106,7 @@ export function isMatchingLabelPair(selectedLabels: string[], expectedLabels: st
   return selectedSorted.every((value, index) => value === expectedSorted[index]);
 }
 
-function parsePromptClaim(rawValue: unknown, index: number): ContradictionPromptClaim | null {
+export function parsePromptClaim(rawValue: unknown, index: number): ContradictionPromptClaim | null {
   if (typeof rawValue !== "string") {
     return null;
   }

@@ -377,7 +377,7 @@ export function WoiNewGameScreen() {
         }
         humanSeatsPayload.push({
           mode: "platform_user",
-          userId,
+          invitedUserId: userId,
         });
       } else if (seat.mode === "email") {
         const email = seat.inviteEmail.trim();
@@ -387,7 +387,7 @@ export function WoiNewGameScreen() {
         }
         humanSeatsPayload.push({
           mode: "email",
-          email,
+          invitedEmail: email,
         });
       } else {
         humanSeatsPayload.push({ mode: "open" });

@@ -130,10 +130,10 @@ export type WoiHumanSeatInstructionInput =
       mode: "open";
     };
 
-export type WoiRosterPresetSlot = {
+export type WoiRosterPresetEntry = {
   mode: "platform_user" | "email" | "open";
-  invitedUserId?: string;
-  invitedEmail?: string;
+  userId?: string;
+  email?: string;
   userName?: string;
   userEmail?: string | null;
 };
@@ -145,7 +145,12 @@ export type WoiRosterPreset = {
   sourceGameId: string | null;
   createdAt: string;
   updatedAt: string;
-  slots: WoiRosterPresetSlot[];
+  entries: WoiRosterPresetEntry[];
+};
+
+export type WoiRosterPresetsResult = {
+  teamPreset: WoiRosterPreset | null;
+  presets: WoiRosterPreset[];
 };
 
 export type WoiCreateWithSlotsInput = {
@@ -501,7 +506,7 @@ function normalizeUserSearchResult(value: unknown): WoiUserSearchResult | null {
   };
 }
 
-function normalizeRosterPresetSlot(value: unknown): WoiRosterPresetSlot | null {
+function normalizeRosterPresetEntry(value: unknown): WoiRosterPresetEntry | null {
   const record = parseObject(value);
   if (!record) {
     return null;
@@ -509,34 +514,34 @@ function normalizeRosterPresetSlot(value: unknown): WoiRosterPresetSlot | null {
 
   const rawMode = readStringValue(record, ["mode", "channel", "inviteMode"], "");
   if (rawMode === "platform_user" || rawMode === "platform_search") {
-    const invitedUserId = readStringValue(
+    const userId = readStringValue(
       record,
       ["invitedUserId", "invited_user_id", "userId", "user_id"],
       "",
     );
-    if (!invitedUserId) {
+    if (!userId) {
       return null;
     }
     return {
       mode: "platform_user",
-      invitedUserId,
+      userId,
       userName: readStringValue(record, ["userName", "user_name"], ""),
       userEmail: readNullableStringValue(record, ["userEmail", "user_email"]),
     };
   }
 
   if (rawMode === "email") {
-    const invitedEmail = readStringValue(
+    const email = readStringValue(
       record,
       ["invitedEmail", "invited_email", "email"],
       "",
     );
-    if (!invitedEmail) {
+    if (!email) {
       return null;
     }
     return {
       mode: "email",
-      invitedEmail,
+      email,
     };
   }
 
@@ -559,9 +564,9 @@ function normalizeRosterPreset(value: unknown, index: number): WoiRosterPreset {
     sourceGameId: readNullableStringValue(record, ["sourceGameId", "source_game_id"]),
     createdAt: readStringValue(record, ["createdAt", "created_at"], ""),
     updatedAt: readStringValue(record, ["updatedAt", "updated_at"], ""),
-    slots: (readArray(record, ["slots", "entries"]) ?? [])
-      .map((slot) => normalizeRosterPresetSlot(slot))
-      .filter((slot): slot is WoiRosterPresetSlot => Boolean(slot)),
+    entries: (readArray(record, ["entries", "slots"]) ?? [])
+      .map((entry) => normalizeRosterPresetEntry(entry))
+      .filter((entry): entry is WoiRosterPresetEntry => Boolean(entry)),
   };
 }
 
@@ -1187,7 +1192,7 @@ export async function generateLearningSubjects(input: {
 
   const root = parseObject(payload) ?? {};
   return (readArray(root, ["subjects"]) ?? [])
-    .map((entry) => parseString(entry))
+    .map((entry) => parseString(entry, ""))
     .filter((entry): entry is string => Boolean(entry?.trim()))
     .map((entry) => entry.trim());
 }
@@ -1324,7 +1329,7 @@ export async function searchWoiUsers(
     .slice(0, limit);
 }
 
-export async function fetchWoiRosterPresets(teamId?: string): Promise<WoiRosterPreset[]> {
+export async function fetchWoiRosterPresets(teamId?: string): Promise<WoiRosterPresetsResult> {
   const params = new URLSearchParams();
   if (teamId?.trim()) {
     params.set("teamId", teamId.trim());
@@ -1332,8 +1337,14 @@ export async function fetchWoiRosterPresets(teamId?: string): Promise<WoiRosterP
 
   const suffix = params.toString() ? `?${params.toString()}` : "";
   const payload = await apiFetch<unknown>(`/api/woi/roster-presets${suffix}`);
-  const presets = coerceListPayload(payload, ["presets", "items", "results"]);
-  return presets.map((entry, index) => normalizeRosterPreset(entry, index));
+  const root = parseObject(payload) ?? {};
+  const teamPresetValue = root.teamPreset ?? root.team_preset;
+  const presetValues = readArray(root, ["presets", "items", "results"]) ?? [];
+
+  return {
+    teamPreset: teamPresetValue ? normalizeRosterPreset(teamPresetValue, 0) : null,
+    presets: presetValues.map((entry, index) => normalizeRosterPreset(entry, index)),
+  };
 }
 
 export async function fetchTemplates(): Promise<WoiTemplateCatalogEntry[]> {

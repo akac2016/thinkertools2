@@ -22,7 +22,7 @@ const draftParamsSchema = z.object({
 
 const patchDraftBodySchema = z.object({
   title: z.string().trim().max(300).optional(),
-  body: z.record(z.unknown()).optional(),
+  body: z.record(z.string(), z.unknown()).optional(),
   slug: z.string().trim().min(1).max(200).nullable().optional(),
 });
 

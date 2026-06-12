@@ -454,7 +454,8 @@ create table if not exists public.trainings (
   title text not null,
   description text not null default '',
   max_level integer not null default 20 check (max_level = 20),
-  is_active boolean not null default false,
+  publication_status text not null default 'pending'
+    check (publication_status in ('pending', 'live', 'archived')),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -467,7 +468,8 @@ create table if not exists public.training_activity_groups (
   training_id uuid not null references public.trainings(id) on delete restrict,
   template_family text not null default '',
   display_order integer not null default 0,
-  is_active boolean not null default true,
+  publication_status text not null default 'pending'
+    check (publication_status in ('pending', 'live', 'archived')),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -490,7 +492,8 @@ create table if not exists public.training_activities (
   recommended_level_max integer not null check (recommended_level_max >= 1 and recommended_level_max <= 20),
   overlevel_grace_levels integer not null default 2 check (overlevel_grace_levels = 2),
   repeatable boolean not null default true,
-  is_active boolean not null default true,
+  publication_status text not null default 'pending'
+    check (publication_status in ('pending', 'live', 'archived')),
   round_content jsonb not null default '{}'::jsonb,
   activity_group_id uuid references public.training_activity_groups(id) on delete set null,
   created_at timestamptz not null default now(),
@@ -521,7 +524,8 @@ create table if not exists public.missions (
   xp_reward integer not null check (xp_reward >= 0),
   rewards_metadata jsonb not null default '{}'::jsonb,
   mission_body jsonb not null default '{}'::jsonb,
-  is_active boolean not null default true,
+  publication_status text not null default 'pending'
+    check (publication_status in ('pending', 'live', 'archived')),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );

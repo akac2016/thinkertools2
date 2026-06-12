@@ -111,7 +111,7 @@ const RAW_TRAINING_ROWS: RawTrainingRow[] = [
     slug: PUBLISHED_TRAINING_SLUG,
     title: PUBLISHED_TRAINING_TITLE,
     max_level: 20,
-    is_active: true,
+    publication_status: "live",
     created_at: "2025-04-12T16:30:00.000Z",
   },
 ];
@@ -124,7 +124,7 @@ const RAW_ACTIVITY_GROUP_ROWS: RawActivityGroupRow[] = PUBLISHED_ACTIVITY_GROUPS
     description: g.description,
     training_id: PUBLISHED_TRAINING_ID,
     display_order: g.displayOrder,
-    is_active: true,
+    publication_status: "live",
   }),
 );
 
@@ -134,7 +134,7 @@ const RAW_MISSION_ROWS: RawMissionRow[] = [
     slug: PUBLISHED_MISSION_SLUG,
     title: PUBLISHED_MISSION_TITLE,
     xp_reward: 60,
-    is_active: true,
+    publication_status: "live",
   },
 ];
 
@@ -192,7 +192,7 @@ test("Property 18: Query-layer parity — trainings query produces the published
   assert.equal(result[0].maxLevel, 20);
 });
 
-test("Property 18: Query-layer parity — trainings query excludes inactive rows", () => {
+test("Property 18: Query-layer parity — trainings query excludes non-live rows", () => {
   const rowsWithInactive: RawTrainingRow[] = [
     ...RAW_TRAINING_ROWS,
     {
@@ -200,7 +200,7 @@ test("Property 18: Query-layer parity — trainings query excludes inactive rows
       slug: "inactive-training",
       title: "Inactive Training",
       max_level: 10,
-      is_active: false,
+      publication_status: "archived",
       created_at: "2025-05-01T00:00:00.000Z",
     },
   ];
@@ -242,7 +242,7 @@ test("Property 18: Query-layer parity — activity groups query excludes other t
       description: "Belongs to another training",
       training_id: "other-training-uuid",
       display_order: 1,
-      is_active: true,
+      publication_status: "live",
     },
   ];
 
@@ -262,7 +262,7 @@ test("Property 18: Query-layer parity — missions query produces the published 
   assert.equal(result[0].title, PUBLISHED_MISSION_TITLE);
 });
 
-test("Property 18: Query-layer parity — missions query excludes inactive missions", () => {
+test("Property 18: Query-layer parity — missions query excludes non-live missions", () => {
   const rowsWithInactive: RawMissionRow[] = [
     ...RAW_MISSION_ROWS,
     {
@@ -270,7 +270,7 @@ test("Property 18: Query-layer parity — missions query excludes inactive missi
       slug: "inactive-mission",
       title: "Inactive Mission",
       xp_reward: 30,
-      is_active: false,
+      publication_status: "archived",
     },
   ];
 
@@ -440,7 +440,7 @@ test("Property 18: End-to-end parity — query + render pipeline produces exact 
 
   // Step 3: Build expected and actual slug sets
   const expectedTrainingSlugs = new Set([PUBLISHED_TRAINING_SLUG]);
-  const expectedGroupSlugs = new Set(PUBLISHED_ACTIVITY_GROUPS.map((g) => g.slug));
+  const expectedGroupSlugs = new Set<string>(PUBLISHED_ACTIVITY_GROUPS.map((g) => g.slug));
   const expectedMissionSlugs = new Set([PUBLISHED_MISSION_SLUG]);
 
   const actualTrainingSlugs = new Set(renderedTrainings.map((t) => t.slug));

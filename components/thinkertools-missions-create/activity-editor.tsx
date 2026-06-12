@@ -137,6 +137,11 @@ export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
     draft.status === "published" && draft.slug ? draft.slug : null,
   );
 
+  // ── Release (Go Live) state ──────────────────────────────────────────────
+  const [releasing, setReleasing] = useState(false);
+  const [releaseError, setReleaseError] = useState<string | null>(null);
+  const [isLive, setIsLive] = useState(false);
+
   // ── Scroll chat to bottom on new messages ───────────────────────────────
   useEffect(() => {
     chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -283,6 +288,23 @@ export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
     }
   }
 
+  // ── Release (Go Live) ────────────────────────────────────────────────────
+  async function handleRelease() {
+    setReleasing(true);
+    setReleaseError(null);
+    try {
+      await apiFetch(
+        `/api/thinkertools-missions-create/drafts/${draftId}/release`,
+        { method: "POST" },
+      );
+      setIsLive(true);
+    } catch (err) {
+      setReleaseError(isApiRequestError(err) ? err.message : "Failed to go live.");
+    } finally {
+      setReleasing(false);
+    }
+  }
+
   const validationIssues: ValidationIssue[] = Array.isArray(currentDraft.validationIssues)
     ? currentDraft.validationIssues
     : [];
@@ -353,18 +375,46 @@ export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
           >
             {publishing ? "Publishing…" : "Publish"}
           </button>
+          {currentDraft.status === "published" && publishedSlug && !isLive ? (
+            <button
+              type="button"
+              onClick={handleRelease}
+              disabled={releasing}
+              className="rounded-md bg-blue-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-600 disabled:opacity-40"
+            >
+              {releasing ? "Going Live…" : "Go Live"}
+            </button>
+          ) : null}
         </div>
       </div>
 
       {/* ── Publish success / error banners ──────────────────────────────── */}
-      {publishedSlug ? (
-        <div className="border-b border-emerald-100 bg-emerald-50 px-4 py-2 text-xs text-emerald-700">
+      {publishedSlug && !isLive ? (
+        <div className="border-b border-blue-100 bg-blue-50 px-4 py-2 text-xs text-blue-700">
           Published as <span className="font-mono font-semibold">{publishedSlug}</span>
+          {" · "}
+          <span className="font-medium">Status: Pending</span>
+          {" · "}
+          Click "Go Live" to make it visible to players
+        </div>
+      ) : null}
+      {isLive ? (
+        <div className="border-b border-emerald-100 bg-emerald-50 px-4 py-2 text-xs text-emerald-700">
+          <span className="font-mono font-semibold">{publishedSlug}</span>
+          {" · "}
+          <span className="font-medium">Status: Live</span>
+          {" · "}
+          Now visible to players
         </div>
       ) : null}
       {publishError ? (
         <div className="border-b border-rose-100 bg-rose-50 px-4 py-2 text-xs text-rose-700">
           {publishError}
+        </div>
+      ) : null}
+      {releaseError ? (
+        <div className="border-b border-rose-100 bg-rose-50 px-4 py-2 text-xs text-rose-700">
+          {releaseError}
         </div>
       ) : null}
 

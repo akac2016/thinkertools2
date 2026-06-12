@@ -15,11 +15,11 @@ export async function GET(request: Request) {
 
     const trainingsResult = await supabaseAdmin
       .from("trainings")
-      .select("id,slug,title,max_level,is_active,created_at")
-      .eq("is_active", true)
+      .select("id,slug,title,max_level,publication_status,created_at")
+      .eq("publication_status", "live")
       .order("created_at", { ascending: true })
       .limit(200)
-      .returns<Pick<TrainingRow, "id" | "slug" | "title" | "max_level" | "is_active" | "created_at">[]>();
+      .returns<Pick<TrainingRow, "id" | "slug" | "title" | "max_level" | "publication_status" | "created_at">[]>();
 
     if (trainingsResult.error) {
       return jsonError("Failed to load trainings", {

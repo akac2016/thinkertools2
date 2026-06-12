@@ -1,5 +1,11 @@
+import { Suspense } from "react";
+
 import { LibraryScreen } from "@/components/woi/library-screen";
 
 export default function LibraryPage() {
-  return <LibraryScreen />;
+  return (
+    <Suspense fallback={null}>
+      <LibraryScreen />
+    </Suspense>
+  );
 }

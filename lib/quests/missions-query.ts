@@ -8,7 +8,7 @@ export type RawMissionRow = {
   slug: string;
   title: string;
   xp_reward: number;
-  is_active: boolean;
+  publication_status: 'pending' | 'live' | 'archived';
 };
 
 export type MissionListEntry = {
@@ -36,7 +36,7 @@ export type RawCompletionRow = {
  */
 export function filterAndOrderActiveMissions(rows: RawMissionRow[]): RawMissionRow[] {
   return rows
-    .filter((row) => row.is_active === true)
+    .filter((row) => row.publication_status === 'live')
     .sort((a, b) => a.slug.localeCompare(b.slug));
 }
 
@@ -59,7 +59,7 @@ export function mergeMissionsWithCompletions(
       slug: mission.slug,
       title: mission.title,
       xpReward: mission.xp_reward,
-      isActive: mission.is_active,
+      isActive: mission.publication_status === 'live',
       isCompleted: Boolean(completion),
       completedAt: completion?.completed_at ?? null,
       awardedXp: completion?.awarded_xp ?? 0,

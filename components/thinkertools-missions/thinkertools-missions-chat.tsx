@@ -1302,17 +1302,20 @@ export function ThinkertoolsMissionsChat() {
     if (!definition && mission.status === "Available") {
       definition = await loadMissionDefinition(mission.id);
       if (definition) {
+        const loadedDefinition = definition;
         setMissions((current) =>
           current.map((m) =>
-            m.id === mission.id ? { ...m, definition, revealedFacts: definition!.stages[0].revealedFactIds
+            m.id === mission.id ? { ...m, definition: loadedDefinition, revealedFacts: loadedDefinition.stages[0].revealedFactIds
               .flatMap((factId) => {
-                const fact = definition!.facts.find((f) => f.id === factId);
+                const fact = loadedDefinition.facts.find((f) => f.id === factId);
                 return fact ? [fact.body] : [];
               }) } : m,
           ),
         );
         // Update selectedMission with the loaded definition
-        setSelectedMission((current) => current?.id === mission.id ? { ...current, definition } : current);
+        setSelectedMission((current) => current?.id === mission.id
+          ? { ...current, definition: loadedDefinition }
+          : current);
       }
     }
 
@@ -1343,8 +1346,9 @@ export function ThinkertoolsMissionsChat() {
     if (!definition) {
       definition = await loadMissionDefinition(mission.id);
       if (definition) {
+        const loadedDefinition = definition;
         setMissions((current) =>
-          current.map((m) => m.id === mission.id ? { ...m, definition } : m),
+          current.map((m) => m.id === mission.id ? { ...m, definition: loadedDefinition } : m),
         );
       }
     }

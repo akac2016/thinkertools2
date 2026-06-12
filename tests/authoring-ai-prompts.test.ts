@@ -157,15 +157,25 @@ test("buildAuthoringMock(mission) returns required top-level fields", () => {
   assert.ok(Array.isArray(mock.resolution_options) && (mock.resolution_options as unknown[]).length >= 2);
 });
 
-test("buildAuthoringMock(mission) action stageIds reference existing stages", () => {
+test("buildAuthoringMock(mission) stage actions and targets reference existing records", () => {
   const mock = buildAuthoringMock("mission", "A spy thriller.") as Record<string, unknown>;
-  const stages = mock.stages as Array<{ id: string }>;
-  const actions = mock.actions as Array<{ stageId: string; targetStageId: string | null }>;
+  const stages = mock.stages as Array<{ id: string; action_ids: string[] }>;
+  const actions = mock.actions as Array<{ id: string; target_stage_id?: string }>;
   const stageIds = new Set(stages.map((s) => s.id));
+  const actionIds = new Set(actions.map((action) => action.id));
+
+  for (const stage of stages) {
+    for (const actionId of stage.action_ids) {
+      assert.ok(actionIds.has(actionId), `stage action ${actionId} must reference an action`);
+    }
+  }
+
   for (const action of actions) {
-    assert.ok(stageIds.has(action.stageId), `action.stageId ${action.stageId} must reference a stage`);
-    if (action.targetStageId !== null) {
-      assert.ok(stageIds.has(action.targetStageId), `action.targetStageId ${action.targetStageId} must reference a stage`);
+    if (action.target_stage_id !== undefined) {
+      assert.ok(
+        stageIds.has(action.target_stage_id),
+        `action.target_stage_id ${action.target_stage_id} must reference a stage`,
+      );
     }
   }
 });

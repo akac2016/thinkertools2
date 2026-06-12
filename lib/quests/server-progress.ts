@@ -13,7 +13,7 @@ export async function getActiveTrainingBySlug(trainingSlug: string) {
     .from("trainings")
     .select(TRAINING_SELECT)
     .eq("slug", trainingSlug)
-    .eq("is_active", true)
+    .eq("publication_status", "live")
     .maybeSingle();
 
   if (trainingResult.error) {

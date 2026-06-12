@@ -25,9 +25,9 @@ export async function GET(
 
     const groupsResult = await supabaseAdmin
       .from("training_activity_groups")
-      .select("id,slug,title,description,training_id,display_order,is_active")
+      .select("id,slug,title,description,training_id,display_order,publication_status")
       .eq("training_id", training.data.id)
-      .eq("is_active", true)
+      .eq("publication_status", "live")
       .order("display_order", { ascending: true })
       .order("slug", { ascending: true })
       .returns<RawActivityGroupRow[]>();

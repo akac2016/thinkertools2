@@ -15,7 +15,15 @@ import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
 type FlowStep = "subject" | "format" | "group" | "describe";
 type ViewMode = "chat" | "manual";
 
-type Training = { id: string; slug: string; title: string; description: string; is_active: boolean };
+type Training = { 
+  id: string; 
+  slug: string; 
+  title: string; 
+  description: string; 
+  publication_status: 'pending' | 'live' | 'archived';
+  isEmpty?: boolean;
+  isDraftOnly?: boolean;
+};
 type ActivityGroup = { id: string; slug: string; title: string; description: string; training_id: string };
 
 type ListTrainingsResponse = { trainings: Training[] };
@@ -53,6 +61,16 @@ export default function MissionsCreatePage() {
   const [newTrainingTitle, setNewTrainingTitle] = useState("");
   const [creatingTraining, setCreatingTraining] = useState(false);
   const [trainingError, setTrainingError] = useState<string | null>(null);
+
+  // Trainings for drafts: empty, draft-only, or pending
+  const draftTrainings = trainings.filter(t =>
+    t.isEmpty || t.isDraftOnly || t.publication_status === 'pending'
+  );
+
+  // Trainings for picker: only live trainings that have content
+  const pickerTrainings = trainings.filter(t => 
+    t.publication_status === 'live' && !t.isEmpty
+  );
 
   // ── Activity group data ──────────────────────────────────────────────────
   const [groups, setGroups] = useState<ActivityGroup[]>([]);
@@ -360,11 +378,17 @@ export default function MissionsCreatePage() {
             </div>
             <div className="px-5 py-4">
               {loadingTrainings ? <p className="text-sm text-slate-400">Loading…</p> : (
-                <div className="flex flex-wrap gap-2">
-                  {trainings.map((t) => (
-                    <button key={t.id} type="button" onClick={() => selectTraining(t)} className="rounded-full border border-slate-200 bg-slate-50 px-4 py-1.5 text-sm text-slate-700 hover:border-slate-400 hover:bg-white transition-colors">{t.title}</button>
-                  ))}
-                </div>
+                <>
+                  {pickerTrainings.length > 0 ? (
+                    <div className="flex flex-wrap gap-2">
+                      {pickerTrainings.map((t) => (
+                        <button key={t.id} type="button" onClick={() => selectTraining(t)} className="rounded-full border border-slate-200 bg-slate-50 px-4 py-1.5 text-sm text-slate-700 hover:border-slate-400 hover:bg-white transition-colors">{t.title}</button>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-slate-500">No published tracks yet. Create one below to get started.</p>
+                  )}
+                </>
               )}
             </div>
             <div className="border-t border-slate-100 px-5 py-4">
@@ -444,7 +468,7 @@ export default function MissionsCreatePage() {
                         </form>
 
                         {/* Option B: describe example questions, AI suggests a name */}
-                        <p className="mb-2 text-xs text-slate-400">Not sure what to call it? Describe a question or two and I'll suggest a name.</p>
+                        <p className="mb-2 text-xs text-slate-400">Not sure what to call it? Describe a question or two and I&apos;ll suggest a name.</p>
                         <form onSubmit={handleSuggestGroupName} className="flex gap-2">
                           <input
                             type="text"
@@ -528,7 +552,7 @@ export default function MissionsCreatePage() {
       {/* Draft list */}
       <section>
         <h2 className="mb-3 text-sm font-semibold text-slate-600">Your drafts</h2>
-        {loadingDrafts ? <p className="text-sm text-slate-400">Loading…</p> : fetchError ? <p className="text-sm text-rose-600">{fetchError}</p> : <DraftList drafts={drafts} />}
+        {loadingDrafts ? <p className="text-sm text-slate-400">Loading…</p> : fetchError ? <p className="text-sm text-rose-600">{fetchError}</p> : <DraftList drafts={drafts} trainings={draftTrainings} />}
       </section>
     </main>
   );

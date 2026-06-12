@@ -50,10 +50,10 @@ export async function GET(
     // 2. Resolve the active group by slug within this training
     const groupResult = await supabaseAdmin
       .from("training_activity_groups")
-      .select("id,slug,training_id,is_active")
+      .select("id,slug,training_id,publication_status")
       .eq("slug", groupSlug)
       .eq("training_id", training.data.id)
-      .eq("is_active", true)
+      .eq("publication_status", "live")
       .maybeSingle();
 
     if (groupResult.error) {
@@ -90,7 +90,7 @@ export async function GET(
       .select(ACTIVITY_SELECT)
       .eq("activity_group_id", groupResult.data.id)
       .eq("content_type", TRAINING_ACTIVITY_CONTENT_TYPE)
-      .eq("is_active", true)
+      .eq("publication_status", "live")
       .order("recommended_level_min", { ascending: true })
       .order("recommended_level_max", { ascending: true })
       .order("slug", { ascending: true })

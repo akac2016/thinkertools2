@@ -19,7 +19,7 @@ const MISSION_SELECT = [
   "completion_criteria",
   "xp_reward",
   "rewards_metadata",
-  "is_active",
+  "publication_status",
 ].join(",");
 
 export type MissionCatalogRow = Pick<MissionRow,
@@ -35,7 +35,7 @@ export type MissionCatalogRow = Pick<MissionRow,
   | "completion_criteria"
   | "xp_reward"
   | "rewards_metadata"
-  | "is_active"
+  | "publication_status"
 >;
 
 type MissionCatalogResult =
@@ -70,7 +70,7 @@ export async function upsertMissionCatalogEntry(input: {
         next_recommended_activity_slug: input.definition.nextRecommendedActivitySlug,
         source_title: input.definition.source.title,
       },
-      is_active: true,
+      publication_status: "live",
       updated_at: new Date().toISOString(),
     }, {
       onConflict: "slug",
@@ -122,7 +122,7 @@ export async function loadActiveMissionBySlug(
     .from("missions")
     .select("id, slug, title, xp_reward, primary_training_id, rewards_metadata, mission_body")
     .eq("slug", slug)
-    .eq("is_active", true)
+    .eq("publication_status", "live")
     .maybeSingle();
 
   if (result.error) {

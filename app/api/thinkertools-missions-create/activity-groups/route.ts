@@ -20,7 +20,7 @@ export async function GET(request: Request) {
     const query = supabaseAdmin
       .from("training_activity_groups")
       .select("id, slug, title, description, training_id, template_family, display_order")
-      .eq("is_active", true)
+      .eq("publication_status", "live")
       .order("display_order", { ascending: true })
       .order("title", { ascending: true });
 
@@ -88,7 +88,7 @@ export async function POST(request: Request) {
         description: description ?? "",
         training_id: trainingId,
         template_family: templateFamily,
-        is_active: true,
+        publication_status: "pending",
       })
       .select("id, slug, title, description, training_id, template_family, display_order")
       .single();

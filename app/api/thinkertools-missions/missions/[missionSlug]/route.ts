@@ -80,8 +80,8 @@ function missionBodyToDefinition(
       stageId: body.contradiction_review.stage_id,
       prompt: body.contradiction_review.prompt,
       claimIds: body.contradiction_review.claim_ids,
-      correctClaimLabels: body.contradiction_review.correct_claim_labels as readonly ["A", "C"],
-      correctClaimIds: body.contradiction_review.correct_claim_ids as readonly [string, string],
+      correctClaimLabels: body.contradiction_review.correct_claim_labels as unknown as readonly ["A", "C"],
+      correctClaimIds: body.contradiction_review.correct_claim_ids as unknown as readonly [string, string],
       explanation: body.contradiction_review.explanation,
     },
     resolutionOptions: body.resolution_options.map((o) => ({

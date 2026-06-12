@@ -10,7 +10,7 @@ export type RawActivityGroupRow = {
   description: string;
   training_id: string;
   display_order: number;
-  is_active: boolean;
+  publication_status: 'pending' | 'live' | 'archived';
 };
 
 export type ActivityGroupSummary = {
@@ -32,7 +32,7 @@ export function filterOrderActivityGroups(
 ): ActivityGroupSummary[] {
   return rows
     .filter(
-      (row) => row.is_active === true && row.training_id === trainingId,
+      (row) => row.publication_status === 'live' && row.training_id === trainingId,
     )
     .sort((a, b) => {
       const orderDiff = a.display_order - b.display_order;

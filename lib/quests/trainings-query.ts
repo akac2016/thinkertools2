@@ -8,7 +8,7 @@ export type RawTrainingRow = {
   slug: string | null | undefined;
   title: string | null | undefined;
   max_level: number;
-  is_active: boolean;
+  publication_status: 'pending' | 'live' | 'archived';
   created_at: string;
 };
 
@@ -27,8 +27,8 @@ const TRAININGS_CAP = 200;
  */
 export function filterCapOrderTrainings(rows: RawTrainingRow[]): ValidTraining[] {
   return rows
-    .filter((row): row is RawTrainingRow & { id: string; slug: string; title: string; is_active: true } =>
-      row.is_active === true &&
+    .filter((row): row is RawTrainingRow & { id: string; slug: string; title: string; publication_status: 'live' } =>
+      row.publication_status === 'live' &&
       typeof row.id === "string" && row.id.trim().length > 0 &&
       typeof row.slug === "string" && row.slug.trim().length > 0 &&
       typeof row.title === "string" && row.title.trim().length > 0

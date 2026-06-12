@@ -8,20 +8,75 @@ import { jsonSuccess } from "@/lib/http";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 
 // GET /api/thinkertools-missions-create/trainings
-// Returns all active trainings so the educator can pick one or create a new one.
+// Returns all trainings with metadata about whether they're empty (no related content).
+// Empty trainings should show in drafts regardless of publication_status.
 export async function GET(request: Request) {
   try {
     const actor = await requireActorIdFromRequest(request);
     if (!actor.ok) return actor.response;
 
-    const { data, error } = await supabaseAdmin
+    const { data: trainings, error } = await supabaseAdmin
       .from("trainings")
-      .select("id, slug, title, description, is_active")
+      .select("id, slug, title, description, publication_status")
       .order("title", { ascending: true });
 
     if (error) throw new Error(error.message);
 
-    return jsonSuccess({ trainings: data ?? [] });
+    if (!trainings || trainings.length === 0) {
+      return jsonSuccess({ trainings: [] });
+    }
+
+    // Check if each training has related content
+    const trainingsWithMetadata = await Promise.all(
+      trainings.map(async (training) => {
+        const [groupsResult, activitiesResult, missionsResult, draftsResult, attemptsResult, completionsResult] = await Promise.all([
+          supabaseAdmin
+            .from("training_activity_groups")
+            .select("id", { count: "exact", head: true })
+            .eq("training_id", training.id),
+          supabaseAdmin
+            .from("training_activities")
+            .select("id", { count: "exact", head: true })
+            .eq("primary_training_id", training.id),
+          supabaseAdmin
+            .from("missions")
+            .select("id", { count: "exact", head: true })
+            .eq("primary_training_id", training.id),
+          supabaseAdmin
+            .from("content_drafts")
+            .select("id", { count: "exact", head: true })
+            .eq("primary_training_id", training.id),
+          supabaseAdmin
+            .from("training_activity_attempts")
+            .select("id", { count: "exact", head: true })
+            .eq("training_id", training.id),
+          supabaseAdmin
+            .from("mission_completions")
+            .select("id", { count: "exact", head: true })
+            .eq("training_id", training.id),
+        ]);
+
+        const hasGroups = (groupsResult.count ?? 0) > 0;
+        const hasActivities = (activitiesResult.count ?? 0) > 0;
+        const hasMissions = (missionsResult.count ?? 0) > 0;
+        const hasDrafts = (draftsResult.count ?? 0) > 0;
+        const hasAttempts = (attemptsResult.count ?? 0) > 0;
+        const hasCompletions = (completionsResult.count ?? 0) > 0;
+
+        const hasPublishedContent =
+          hasGroups || hasActivities || hasMissions || hasAttempts || hasCompletions;
+        const isDraftOnly = !hasPublishedContent && hasDrafts;
+        const isEmpty = !hasPublishedContent && !hasDrafts;
+
+        return {
+          ...training,
+          isEmpty,
+          isDraftOnly,
+        };
+      })
+    );
+
+    return jsonSuccess({ trainings: trainingsWithMetadata });
   } catch (error) {
     return unexpectedError("Failed to list trainings", error);
   }
@@ -73,9 +128,9 @@ export async function POST(request: Request) {
         title,
         description: description ?? "",
         max_level: 20,
-        is_active: true,
+        publication_status: "pending",
       })
-      .select("id, slug, title, description, is_active")
+      .select("id, slug, title, description, publication_status")
       .single();
 
     if (error) throw new Error(error.message);

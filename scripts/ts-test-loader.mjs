@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { pathToFileURL, fileURLToPath } from "node:url";
+import { pathToFileURL } from "node:url";
 import { resolve as resolvePath } from "node:path";
 
 const tsPath = `${process.cwd()}/node_modules/typescript/lib/typescript.js`;

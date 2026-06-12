@@ -74,7 +74,7 @@ export async function POST(request: Request, context: RouteContext) {
       .select("id")
       .eq("slug", groupSlug)
       .eq("training_id", training.data.id)
-      .eq("is_active", true)
+      .eq("publication_status", "live")
       .maybeSingle();
 
     if (groupResult.error) {
@@ -103,7 +103,7 @@ export async function POST(request: Request, context: RouteContext) {
       .eq("primary_training_id", training.data.id)
       .eq("activity_group_id", groupResult.data.id)
       .eq("content_type", TRAINING_ACTIVITY_CONTENT_TYPE)
-      .eq("is_active", true)
+      .eq("publication_status", "live")
       .maybeSingle();
 
     if (activityResult.error) {
