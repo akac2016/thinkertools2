@@ -9,6 +9,7 @@ import {
   getDraftById,
   updateDraft,
 } from "@/lib/authoring/server";
+import { supabaseAdmin } from "@/lib/supabase/admin";
 import { validateDraft } from "@/lib/authoring/validation";
 import { jsonError, jsonSuccess } from "@/lib/http";
 
@@ -66,6 +67,31 @@ async function resolveAndAuthorize(request: Request, context: RouteContext) {
   return { ok: true as const, draft, actorId: actor.actorId };
 }
 
+async function enrichDraftMetadata(draft: Awaited<ReturnType<typeof getDraftById>>) {
+  if (!draft) return draft;
+
+  const [trainingResult, groupResult] = await Promise.all([
+    supabaseAdmin
+      .from("trainings")
+      .select("title")
+      .eq("id", draft.primaryTrainingId)
+      .maybeSingle(),
+    draft.activityGroupId
+      ? supabaseAdmin
+          .from("training_activity_groups")
+          .select("title")
+          .eq("id", draft.activityGroupId)
+          .maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+  ]);
+
+  return {
+    ...draft,
+    trainingTitle: trainingResult.data?.title ?? null,
+    activityGroupTitle: groupResult.data?.title ?? null,
+  };
+}
+
 // GET /api/thinkertools-missions-create/drafts/[draftId]
 export async function GET(request: Request, context: RouteContext) {
   try {
@@ -74,7 +100,8 @@ export async function GET(request: Request, context: RouteContext) {
       return resolved.response;
     }
 
-    return jsonSuccess({ draft: resolved.draft }, { status: 200 });
+    const enriched = await enrichDraftMetadata(resolved.draft);
+    return jsonSuccess({ draft: enriched }, { status: 200 });
   } catch (error) {
     return unexpectedError("Failed to get draft", error);
   }

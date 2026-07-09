@@ -11,6 +11,7 @@ import { DraftSourceBadge } from "./draft-source-badge";
 type Props = {
   drafts: ContentDraft[];
   trainings?: Training[];
+  onResumeTraining?: (training: Training) => void;
 };
 
 type Training = {
@@ -21,6 +22,7 @@ type Training = {
   publication_status: 'pending' | 'live' | 'archived';
   isEmpty?: boolean;
   isDraftOnly?: boolean;
+  hasReleasableContent?: boolean;
 };
 
 type UnifiedDraftItem = 
@@ -46,6 +48,9 @@ const CONTENT_TYPE_LABELS: Record<ContentDraft["contentType"], string> = {
   mission: "Mission",
 };
 
+const EMPTY_TRAINING_RELEASE_MESSAGE =
+  "Add and release at least one activity or mission before releasing this training.";
+
 function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString(undefined, {
     month: "short",
@@ -56,13 +61,14 @@ function formatDate(iso: string) {
 
 type FilterStatus = "all" | ContentDraft["status"];
 
-export function DraftList({ drafts: initialDrafts, trainings = [] }: Props) {
+export function DraftList({ drafts: initialDrafts, trainings = [], onResumeTraining }: Props) {
   const [drafts, setDrafts] = useState(initialDrafts);
   const [displayedTrainings, setDisplayedTrainings] = useState(trainings);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterStatus>("all");
   const [releasing, setReleasing] = useState<string | null>(null);
   const [releaseError, setReleaseError] = useState<string | null>(null);
+  const [activeReleaseTooltip, setActiveReleaseTooltip] = useState<string | null>(null);
 
   // Create unified list of items
   const allItems: UnifiedDraftItem[] = [
@@ -115,24 +121,6 @@ export function DraftList({ drafts: initialDrafts, trainings = [] }: Props) {
     }
   }
 
-  async function handleReleaseTraining(e: React.MouseEvent, trainingId: string) {
-    e.preventDefault();
-    if (releasing) return;
-    setReleasing(trainingId);
-    setReleaseError(null);
-    try {
-      await apiFetch(`/api/thinkertools-missions-create/trainings/${trainingId}/release`, {
-        method: "POST",
-      });
-      // Remove from displayed list on success
-      setDisplayedTrainings(prev => prev.filter(t => t.id !== trainingId));
-    } catch (err) {
-      setReleaseError(isApiRequestError(err) ? err.message : "Failed to release training");
-    } finally {
-      setReleasing(null);
-    }
-  }
-
   async function handleDeleteTraining(e: React.MouseEvent, trainingId: string) {
     e.preventDefault();
     e.stopPropagation();
@@ -166,6 +154,14 @@ export function DraftList({ drafts: initialDrafts, trainings = [] }: Props) {
     published: drafts.filter((d) => d.status === "published").length,
     archived: drafts.filter((d) => d.status === "archived").length,
   };
+
+  function handleTrainingRowKeyDown(e: React.KeyboardEvent, training: Training) {
+    if (!onResumeTraining || (e.key !== "Enter" && e.key !== " ")) return;
+    if ((e.target as HTMLElement | null)?.closest("button")) return;
+
+    e.preventDefault();
+    onResumeTraining(training);
+  }
 
   return (
     <div className="space-y-3">
@@ -243,8 +239,16 @@ export function DraftList({ drafts: initialDrafts, trainings = [] }: Props) {
                 : "bg-amber-100 text-amber-700";
               
               return (
-                <li key={`training-${training.id}`} className="flex items-stretch">
-                  <div className="flex flex-1 items-start justify-between gap-4 px-5 py-4 bg-amber-50/50">
+                <li
+                  key={`training-${training.id}`}
+                  className={`flex items-stretch bg-amber-50/50 ${onResumeTraining ? "cursor-pointer transition-colors hover:bg-amber-50" : ""}`}
+                  onClick={() => onResumeTraining?.(training)}
+                  onKeyDown={(e) => handleTrainingRowKeyDown(e, training)}
+                  role={onResumeTraining ? "button" : undefined}
+                  tabIndex={onResumeTraining ? 0 : undefined}
+                  aria-label={onResumeTraining ? `Resume ${training.title}` : undefined}
+                >
+                  <div className="flex flex-1 items-start justify-between gap-4 px-5 py-4">
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-medium text-slate-900">
                         {training.title}
@@ -261,32 +265,87 @@ export function DraftList({ drafts: initialDrafts, trainings = [] }: Props) {
                          training.isEmpty ? 'Empty' : 'Draft'}
                       </p>
 
-                      {/* Go Live button - only show for pending trainings */}
+                      {/* Go Live button - disabled until pending trainings have live content */}
                       {training.publication_status === 'pending' && (
-                        <button
-                          type="button"
-                          onClick={async (e) => {
-                            e.preventDefault();
-                            if (releasing) return;
-                            setReleasing(training.id);
-                            setReleaseError(null);
-                            try {
-                              await apiFetch(`/api/thinkertools-missions-create/trainings/${training.id}/release`, {
-                                method: "POST",
-                              });
-                              window.location.reload(); // Refresh to show updated status
-                            } catch (err) {
-                              setReleaseError(isApiRequestError(err) ? err.message : "Failed to release training");
-                            } finally {
-                              setReleasing(null);
-                            }
+                        <span
+                          className="relative inline-flex"
+                          onClick={(e) => e.stopPropagation()}
+                          onKeyDown={(e) => e.stopPropagation()}
+                          onMouseEnter={() => {
+                            if (!training.hasReleasableContent) setActiveReleaseTooltip(training.id);
                           }}
-                          disabled={releasing === training.id}
-                          aria-label="Go live"
-                          className="rounded-md bg-emerald-600 px-3 py-1 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-40"
+                          onMouseLeave={() => {
+                            if (activeReleaseTooltip === training.id) setActiveReleaseTooltip(null);
+                          }}
                         >
-                          {releasing === training.id ? "..." : "Go Live"}
-                        </button>
+                          <button
+                            type="button"
+                            onClick={async (e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              if (releasing || !training.hasReleasableContent) return;
+                              setReleasing(training.id);
+                              setReleaseError(null);
+                              try {
+                                await apiFetch(`/api/thinkertools-missions-create/trainings/${training.id}/release`, {
+                                  method: "POST",
+                                });
+                                window.location.reload(); // Refresh to show updated status
+                              } catch (err) {
+                                setReleaseError(isApiRequestError(err) ? err.message : "Failed to release training");
+                              } finally {
+                                setReleasing(null);
+                              }
+                            }}
+                            disabled={releasing === training.id || !training.hasReleasableContent}
+                            aria-label={
+                              training.hasReleasableContent
+                                ? "Go live"
+                                : "Go live unavailable: add and release at least one activity or mission first"
+                            }
+                            className={`rounded-md px-3 py-1 text-xs font-medium text-white disabled:cursor-not-allowed ${
+                              training.hasReleasableContent
+                                ? "bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40"
+                                : "bg-slate-300 text-slate-500"
+                            }`}
+                          >
+                            {releasing === training.id ? "..." : "Go Live"}
+                          </button>
+                          {!training.hasReleasableContent ? (
+                            <>
+                              <span
+                                role="button"
+                                tabIndex={0}
+                                aria-disabled="true"
+                                aria-describedby={`release-tooltip-${training.id}`}
+                                aria-label="Go live unavailable"
+                                className="absolute inset-0 z-10 cursor-not-allowed rounded-md"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  setActiveReleaseTooltip(training.id);
+                                }}
+                                onFocus={() => setActiveReleaseTooltip(training.id)}
+                                onBlur={() => setActiveReleaseTooltip(null)}
+                                onKeyDown={(e) => {
+                                  e.stopPropagation();
+                                  if (e.key !== "Enter" && e.key !== " ") return;
+                                  e.preventDefault();
+                                  setActiveReleaseTooltip(training.id);
+                                }}
+                              />
+                              {activeReleaseTooltip === training.id ? (
+                                <span
+                                  id={`release-tooltip-${training.id}`}
+                                  role="tooltip"
+                                  className="absolute bottom-full right-0 z-20 mb-2 w-56 rounded-md bg-slate-900 px-3 py-2 text-left text-xs font-medium leading-snug text-white shadow-lg"
+                                >
+                                  {EMPTY_TRAINING_RELEASE_MESSAGE}
+                                </span>
+                              ) : null}
+                            </>
+                          ) : null}
+                        </span>
                       )}
 
                       {/* Trash icon */}
@@ -323,7 +382,7 @@ export function DraftList({ drafts: initialDrafts, trainings = [] }: Props) {
                 >
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium text-slate-900">
-                      {draft.title || <span className="italic text-slate-400">Untitled</span>}
+                      {draft.title || draft.trainingTitle || <span className="italic text-slate-400">Untitled</span>}
                     </p>
                     <div className="mt-1.5 flex flex-wrap items-center gap-2">
                       <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${STATUS_STYLES[draft.status]}`}>
@@ -332,7 +391,14 @@ export function DraftList({ drafts: initialDrafts, trainings = [] }: Props) {
                       <span className="text-[11px] text-slate-500">
                         {CONTENT_TYPE_LABELS[draft.contentType]}
                       </span>
-                      <DraftSourceBadge aiSource={draft.aiSource} />
+                      {draft.contentType === "activity" && draft.activityGroupTitle ? (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-cyan-100 px-2 py-0.5 text-[11px] font-medium text-cyan-700">
+                          <span className="h-1.5 w-1.5 rounded-full bg-cyan-500" aria-hidden="true" />
+                          {draft.activityGroupTitle}
+                        </span>
+                      ) : (
+                        <DraftSourceBadge aiSource={draft.aiSource} />
+                      )}
                     </div>
                   </div>
 

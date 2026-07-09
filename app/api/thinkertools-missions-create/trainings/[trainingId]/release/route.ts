@@ -74,6 +74,40 @@ export async function POST(request: Request, context: RouteContext) {
       );
     }
 
+    const [activitiesResult, missionsResult] = await Promise.all([
+      supabaseAdmin
+        .from("training_activities")
+        .select("id", { count: "exact", head: true })
+        .eq("primary_training_id", trainingId)
+        .eq("publication_status", "live"),
+      supabaseAdmin
+        .from("missions")
+        .select("id", { count: "exact", head: true })
+        .eq("primary_training_id", trainingId)
+        .eq("publication_status", "live"),
+    ]);
+
+    if (activitiesResult.error) {
+      throw new Error(`Failed to count training activities: ${activitiesResult.error.message}`);
+    }
+
+    if (missionsResult.error) {
+      throw new Error(`Failed to count training missions: ${missionsResult.error.message}`);
+    }
+
+    const hasReleasableContent =
+      (activitiesResult.count ?? 0) > 0 || (missionsResult.count ?? 0) > 0;
+
+    if (!hasReleasableContent) {
+      return jsonError(
+        "Add and release at least one activity or mission before releasing this training.",
+        {
+          status: 409,
+          code: "TRAINING_RELEASE_EMPTY",
+        },
+      );
+    }
+
     // --- Flip publication_status to 'live' ---
     const { error: updateError } = await supabaseAdmin
       .from("trainings")

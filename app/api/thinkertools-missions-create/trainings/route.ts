@@ -37,11 +37,13 @@ export async function GET(request: Request) {
           supabaseAdmin
             .from("training_activities")
             .select("id", { count: "exact", head: true })
-            .eq("primary_training_id", training.id),
+            .eq("primary_training_id", training.id)
+            .eq("publication_status", "live"),
           supabaseAdmin
             .from("missions")
             .select("id", { count: "exact", head: true })
-            .eq("primary_training_id", training.id),
+            .eq("primary_training_id", training.id)
+            .eq("publication_status", "live"),
           supabaseAdmin
             .from("content_drafts")
             .select("id", { count: "exact", head: true })
@@ -62,6 +64,7 @@ export async function GET(request: Request) {
         const hasDrafts = (draftsResult.count ?? 0) > 0;
         const hasAttempts = (attemptsResult.count ?? 0) > 0;
         const hasCompletions = (completionsResult.count ?? 0) > 0;
+        const hasReleasableContent = hasActivities || hasMissions;
 
         const hasPublishedContent =
           hasGroups || hasActivities || hasMissions || hasAttempts || hasCompletions;
@@ -72,6 +75,7 @@ export async function GET(request: Request) {
           ...training,
           isEmpty,
           isDraftOnly,
+          hasReleasableContent,
         };
       })
     );
@@ -135,7 +139,17 @@ export async function POST(request: Request) {
 
     if (error) throw new Error(error.message);
 
-    return jsonSuccess({ training: data }, { status: 201 });
+    return jsonSuccess(
+      {
+        training: {
+          ...data,
+          isEmpty: true,
+          isDraftOnly: false,
+          hasReleasableContent: false,
+        },
+      },
+      { status: 201 },
+    );
   } catch (error) {
     return unexpectedError("Failed to create training", error);
   }

@@ -257,6 +257,7 @@ export async function POST(request: Request, context: RouteContext) {
         slug,
         title: draft.title || "Untitled Activity",
         primary_training_id: draft.primaryTrainingId,
+        activity_group_id: draft.activityGroupId,
         content_type: "activity",
         template_family: "contradiction_belief_set_incompatible_pair",
         publication_status: "pending",

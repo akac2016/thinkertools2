@@ -66,7 +66,7 @@ function DraftEditorPageContent({ params }: Props) {
   }, [draftId]);
 
   return (
-    <main className="mx-auto max-w-3xl px-4 py-10 sm:px-6">
+    <main className="mx-auto max-w-6xl px-4 py-10 sm:px-6">
       {/* Back link */}
       <div className="mb-6">
         <Link
@@ -95,7 +95,7 @@ function DraftEditorPageContent({ params }: Props) {
         <>
           <header className="mb-6">
             <h1 className="text-xl font-semibold text-slate-900">
-              {draft.title || (
+              {draft.title || draft.trainingTitle || (
                 <span className="italic text-slate-400">Untitled</span>
               )}
             </h1>

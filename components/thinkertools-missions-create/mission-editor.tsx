@@ -21,8 +21,6 @@ type ChatMessage = {
   text: string;
 };
 
-type ViewMode = "chat" | "form";
-
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const STATUS_STYLES: Record<ContentDraft["status"], string> = {
@@ -110,9 +108,6 @@ function JsonField({
 export function MissionEditor({ draft, onDraftChange, fromMessage }: Props) {
   const draftId = draft.id;
 
-  // ── View toggle ─────────────────────────────────────────────────────────
-  const [view, setView] = useState<ViewMode>("chat");
-
   // ── Shared draft (kept in sync) ─────────────────────────────────────────
   const [currentDraft, setCurrentDraft] = useState(draft);
   const raw = toMissionBodyRaw(currentDraft.body);
@@ -130,7 +125,7 @@ export function MissionEditor({ draft, onDraftChange, fromMessage }: Props) {
       id: nextId(),
       role: "assistant",
       text: hasExistingContent
-        ? "I've drafted a mission based on your description. You can see the structure in the preview card below. Keep chatting to refine it, or switch to the Form tab to edit any field directly."
+        ? "I've drafted a mission based on your description. You can see the structure in the preview card below. Keep chatting to refine it, or edit any field directly in the manual form."
         : "Hi! Describe the mission you want to create — the scenario, how many stages, what the contradiction is about. I'll draft the full structure for you.",
     });
     return msgs;
@@ -186,9 +181,14 @@ export function MissionEditor({ draft, onDraftChange, fromMessage }: Props) {
   }, [messages]);
 
   function syncFormFromDraft(updated: ContentDraft) {
+    const mergedDraft: ContentDraft = {
+      ...updated,
+      trainingTitle: updated.trainingTitle ?? currentDraft.trainingTitle ?? null,
+      activityGroupTitle: updated.activityGroupTitle ?? currentDraft.activityGroupTitle ?? null,
+    };
     const r = toMissionBodyRaw(updated.body);
-    setCurrentDraft(updated);
-    setTitle(updated.title);
+    setCurrentDraft(mergedDraft);
+    setTitle(mergedDraft.title);
     setNarrativeHook(typeof r.narrative_hook === "string" ? r.narrative_hook : "");
     setShortDescription(typeof r.short_description === "string" ? r.short_description : "");
     setDifficultyLabel(typeof r.difficulty_label === "string" ? r.difficulty_label : "");
@@ -202,7 +202,7 @@ export function MissionEditor({ draft, onDraftChange, fromMessage }: Props) {
     setResolutionOptionsJson(prettyJson(r.resolution_options));
     setResolutionReviewJson(prettyJson(r.resolution_review));
     setDebriefJson(prettyJson(r.debrief));
-    onDraftChange(updated);
+    onDraftChange(mergedDraft);
   }
 
   // ── Chat submit ──────────────────────────────────────────────────────────
@@ -233,7 +233,7 @@ export function MissionEditor({ draft, onDraftChange, fromMessage }: Props) {
           {
             id: nextId(),
             role: "assistant",
-            text: `Done! I've drafted a mission: ${summary}. Switch to the Form tab to review the full structure, or keep chatting to refine it.`,
+            text: `Done! I've drafted a mission: ${summary}. Review the full structure in the manual form, or keep chatting to refine it.`,
           },
         ]);
       } else {
@@ -351,7 +351,7 @@ export function MissionEditor({ draft, onDraftChange, fromMessage }: Props) {
     <div className="flex flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
 
       {/* ── Top bar ──────────────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
         <div className="flex items-center gap-2">
           <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${STATUS_STYLES[currentDraft.status]}`}>
             {STATUS_LABELS[currentDraft.status]}
@@ -362,23 +362,6 @@ export function MissionEditor({ draft, onDraftChange, fromMessage }: Props) {
               {validationIssues.length} issue{validationIssues.length !== 1 ? "s" : ""}
             </span>
           ) : null}
-        </div>
-
-        <div className="flex rounded-lg border border-slate-200 bg-slate-50 p-0.5">
-          <button
-            type="button"
-            onClick={() => setView("chat")}
-            className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${view === "chat" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
-          >
-            AI Chat
-          </button>
-          <button
-            type="button"
-            onClick={() => setView("form")}
-            className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${view === "form" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
-          >
-            Form
-          </button>
         </div>
 
         <div className="flex items-center gap-2">
@@ -415,7 +398,7 @@ export function MissionEditor({ draft, onDraftChange, fromMessage }: Props) {
           {" · "}
           <span className="font-medium">Status: Pending</span>
           {" · "}
-          Click "Go Live" to make it visible to players
+          Click &quot;Go Live&quot; to make it visible to players
         </div>
       ) : null}
       {isLive ? (
@@ -438,11 +421,16 @@ export function MissionEditor({ draft, onDraftChange, fromMessage }: Props) {
         </div>
       ) : null}
 
-      {/* ══════════════════════════════════════════════════════════════════ */}
-      {/* AI CHAT PLANE                                                      */}
-      {/* ══════════════════════════════════════════════════════════════════ */}
-      {view === "chat" ? (
-        <div className="flex flex-col" style={{ minHeight: "520px" }}>
+      <div className="grid min-h-[620px] lg:grid-cols-[minmax(0,0.95fr)_minmax(420px,1.05fr)]">
+        {/* ══════════════════════════════════════════════════════════════════ */}
+        {/* AI CHAT PLANE                                                      */}
+        {/* ══════════════════════════════════════════════════════════════════ */}
+        <section className="flex min-h-[520px] flex-col border-b border-slate-100 lg:border-b-0 lg:border-r">
+          <div className="border-b border-slate-100 px-4 py-3">
+            <h2 className="text-sm font-semibold text-slate-800">AI Chat</h2>
+            <p className="mt-0.5 text-xs text-slate-400">Ask for drafts or structural revisions.</p>
+          </div>
+
           <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
             {messages.map((msg) => (
               <div key={msg.id} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
@@ -510,14 +498,16 @@ export function MissionEditor({ draft, onDraftChange, fromMessage }: Props) {
             </button>
           </form>
           {chatError ? <p className="px-4 pb-3 text-xs text-rose-600">{chatError}</p> : null}
-        </div>
-      ) : null}
+        </section>
 
-      {/* ══════════════════════════════════════════════════════════════════ */}
-      {/* FORM PLANE                                                         */}
-      {/* ══════════════════════════════════════════════════════════════════ */}
-      {view === "form" ? (
+        {/* ══════════════════════════════════════════════════════════════════ */}
+        {/* FORM PLANE                                                         */}
+        {/* ══════════════════════════════════════════════════════════════════ */}
         <form onSubmit={handleSave} className="space-y-4 px-5 py-5">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-800">Manual Form</h2>
+            <p className="mt-0.5 text-xs text-slate-400">Edit fields directly and save the draft.</p>
+          </div>
           <p className="text-xs text-slate-400">Fields stay in sync with the AI chat. Saving here updates the draft.</p>
 
           {validationIssues.length > 0 ? (
@@ -595,7 +585,7 @@ export function MissionEditor({ draft, onDraftChange, fromMessage }: Props) {
             {saveError ? <span className="text-xs text-rose-700">{saveError}</span> : null}
           </div>
         </form>
-      ) : null}
+      </div>
     </div>
   );
 }
