@@ -33,6 +33,19 @@ alter table public.woi_turns enable row level security;
 alter table public.event_log enable row level security;
 alter table public.ai_runs enable row level security;
 
+-- ThinkerTools Missions domain — RLS added in migration
+-- 20260531000000_thinkertools_missions_rls.sql.
+-- Catalog tables: RLS on, no policies (fail-closed backstop; reads go through
+-- service_role, which bypasses RLS).
+alter table public.trainings enable row level security;
+alter table public.training_activity_groups enable row level security;
+alter table public.training_activities enable row level security;
+alter table public.missions enable row level security;
+-- Per-user tables: RLS on + self-access policies (defined below).
+alter table public.user_training_progress enable row level security;
+alter table public.training_activity_attempts enable row level security;
+alter table public.mission_completions enable row level security;
+
 -- ----------
 -- Helper functions (auth -> app user resolution)
 -- ----------
@@ -172,6 +185,10 @@ drop policy if exists woi_roster_presets_owner_select on public.woi_roster_prese
 drop policy if exists woi_turns_visible_select on public.woi_turns;
 
 drop policy if exists comments_visible_select on public.comments;
+
+drop policy if exists user_training_progress_self_select on public.user_training_progress;
+drop policy if exists training_activity_attempts_self_select on public.training_activity_attempts;
+drop policy if exists mission_completions_self_select on public.mission_completions;
 
 -- ----------
 -- Team/membership read policies (authenticated only)
@@ -360,3 +377,37 @@ using (
 -- Note:
 -- No INSERT/UPDATE/DELETE policies are created intentionally.
 -- Client-side writes are denied; perform writes via server-side service role.
+
+-- ----------
+-- ThinkerTools Missions: per-user read policies
+-- ----------
+-- Catalog tables (trainings, training_activity_groups, training_activities,
+-- missions) have RLS enabled above with NO policy — fail-closed backstop;
+-- reads run through service_role, which bypasses RLS.
+--
+-- The per-user tables below restrict client reads to the user's own rows.
+-- FUTURE (teachers viewing students): policies are additive (OR'd), so add a
+-- second `..._teacher_select` policy per table when a teacher/student model
+-- exists — no change to the self-access policies below.
+
+create policy user_training_progress_self_select
+on public.user_training_progress
+for select
+to authenticated
+using (user_id = public.current_app_user_id());
+
+create policy training_activity_attempts_self_select
+on public.training_activity_attempts
+for select
+to authenticated
+using (user_id = public.current_app_user_id());
+
+create policy mission_completions_self_select
+on public.mission_completions
+for select
+to authenticated
+using (user_id = public.current_app_user_id());
+
+-- content_drafts intentionally omitted here: it is the authoring/create-side
+-- table, not part of the missions consumer feature, and currently has RLS off.
+-- Revisit it with the authoring flow, not here.

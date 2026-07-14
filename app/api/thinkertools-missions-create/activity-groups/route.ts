@@ -7,8 +7,25 @@ import { requireActorIdFromRequest } from "@/lib/auth/actor";
 import { jsonSuccess } from "@/lib/http";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 
+type ActivityGroupRow = {
+  id: string;
+  slug: string;
+  title: string;
+  description: string;
+  training_id: string;
+  template_family: string;
+  display_order: number;
+};
+
+function normalizeTitle(value: string): string {
+  return value.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+const GROUP_SELECT = "id, slug, title, description, training_id, template_family, display_order";
+
 // GET /api/thinkertools-missions-create/activity-groups?trainingId=<uuid>
-// Returns all active activity groups for a given training.
+// Returns all non-archived activity groups for authoring, including pending
+// draft categories that are not yet visible to learners.
 export async function GET(request: Request) {
   try {
     const actor = await requireActorIdFromRequest(request);
@@ -19,8 +36,8 @@ export async function GET(request: Request) {
 
     const query = supabaseAdmin
       .from("training_activity_groups")
-      .select("id, slug, title, description, training_id, template_family, display_order")
-      .eq("is_active", true)
+      .select(GROUP_SELECT)
+      .neq("publication_status", "archived")
       .order("display_order", { ascending: true })
       .order("title", { ascending: true });
 
@@ -54,6 +71,23 @@ export async function POST(request: Request) {
     if (!parsed.ok) return parsed.response;
 
     const { trainingId, title, description } = parsed.data;
+    const normalizedTitle = normalizeTitle(title);
+
+    const { data: existingGroups, error: existingError } = await supabaseAdmin
+      .from("training_activity_groups")
+      .select(GROUP_SELECT)
+      .eq("training_id", trainingId)
+      .neq("publication_status", "archived");
+
+    if (existingError) throw new Error(existingError.message);
+
+    const existingGroup = ((existingGroups ?? []) as ActivityGroupRow[]).find(
+      (group) => normalizeTitle(group.title) === normalizedTitle,
+    );
+
+    if (existingGroup) {
+      return jsonSuccess({ group: existingGroup }, { status: 200 });
+    }
 
     // Derive slug from title
     const baseSlug = title
@@ -88,9 +122,9 @@ export async function POST(request: Request) {
         description: description ?? "",
         training_id: trainingId,
         template_family: templateFamily,
-        is_active: true,
+        publication_status: "pending",
       })
-      .select("id, slug, title, description, training_id, template_family, display_order")
+      .select(GROUP_SELECT)
       .single();
 
     if (error) throw new Error(error.message);

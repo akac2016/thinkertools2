@@ -259,7 +259,7 @@ async function resolveLegacyActor(request: Request): Promise<RequiredActorSucces
   return {
     ok: true,
     actorId: parsedUserId.data,
-    actorSource: actor.source,
+    actorSource: actor.source === "header" ? "header" : "default",
   };
 }
 

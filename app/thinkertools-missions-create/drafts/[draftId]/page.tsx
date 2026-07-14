@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { use, useEffect, useState } from "react";
+import { Suspense, use, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
 import { apiFetch, isApiRequestError } from "@/components/quipx/client";
@@ -18,7 +18,7 @@ type GetDraftResponse = {
   draft: ContentDraft;
 };
 
-export default function DraftEditorPage({ params }: Props) {
+function DraftEditorPageContent({ params }: Props) {
   const { draftId } = use(params);
   const searchParams = useSearchParams();
   const fromMessage = searchParams.get("from") ?? undefined;
@@ -66,7 +66,7 @@ export default function DraftEditorPage({ params }: Props) {
   }, [draftId]);
 
   return (
-    <main className="mx-auto max-w-3xl px-4 py-10 sm:px-6">
+    <main className="mx-auto max-w-6xl px-4 py-10 sm:px-6">
       {/* Back link */}
       <div className="mb-6">
         <Link
@@ -95,7 +95,7 @@ export default function DraftEditorPage({ params }: Props) {
         <>
           <header className="mb-6">
             <h1 className="text-xl font-semibold text-slate-900">
-              {draft.title || (
+              {draft.title || draft.trainingTitle || (
                 <span className="italic text-slate-400">Untitled</span>
               )}
             </h1>
@@ -117,5 +117,13 @@ export default function DraftEditorPage({ params }: Props) {
         </>
       )}
     </main>
+  );
+}
+
+export default function DraftEditorPage(props: Props) {
+  return (
+    <Suspense fallback={null}>
+      <DraftEditorPageContent {...props} />
+    </Suspense>
   );
 }

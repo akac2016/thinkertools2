@@ -108,6 +108,12 @@ export default async function Home() {
               </div>
             </div>
 
+            <div className={`${styles.toolbox} ${styles.missions}`}>
+              <Link href="/thinkertools-missions" className={styles.toollink}>
+                Thinkertools Missions
+              </Link>
+            </div>
+
             <div className={`${styles.toolbox} ${styles.quipx} ${styles.disabledTool}`} aria-disabled="true">
               <span className={`${styles.toollink} ${styles.disabledToolLink}`}>
                 Quipx

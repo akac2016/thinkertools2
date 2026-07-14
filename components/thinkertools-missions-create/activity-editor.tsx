@@ -30,8 +30,6 @@ type ChatMessage = {
   text: string;
 };
 
-type ViewMode = "chat" | "form";
-
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function toActivityBody(body: unknown): ActivityBody {
@@ -61,6 +59,63 @@ function summariseDraft(body: ActivityBody): string {
   return `${claimCount} claim${claimCount !== 1 ? "s" : ""} · correct: ${labels} · expects ${answerCount} answer${answerCount !== 1 ? "s" : ""}`;
 }
 
+function hasActivityBodyContent(body: ActivityBody): boolean {
+  return Boolean(body.question_text || body.prompt_claims.length > 0);
+}
+
+function isAdditiveQuestionRequest(input: string): boolean {
+  const normalized = input.toLowerCase().trim();
+  if (!normalized) return false;
+  if (!normalized.includes("question")) return false;
+
+  const additiveMarkers = [
+    "more question",
+    "another question",
+    "new question",
+    "additional question",
+    "add question",
+    "generate question",
+    "create question",
+    "give me",
+  ];
+
+  if (additiveMarkers.some((marker) => normalized.includes(marker))) return true;
+  return /\b\d+\s+more\b/.test(normalized);
+}
+
+function requestedAdditionalQuestionCount(input: string): number {
+  const normalized = input.toLowerCase();
+  const explicit = normalized.match(/\b(\d+)\s+(?:more|new|additional)?\s*questions?\b/);
+  if (explicit) {
+    const parsed = Number.parseInt(explicit[1], 10);
+    if (Number.isFinite(parsed) && parsed > 0) return Math.min(parsed, 10);
+  }
+  if (/\banother\b/.test(normalized)) return 1;
+  return 1;
+}
+
+function buildAdditionalQuestionDescription(
+  base: ActivityBody,
+  instruction: string,
+  trainingTitle: string | null | undefined,
+  activityGroupTitle: string | null | undefined,
+): string {
+  const scope = activityGroupTitle || trainingTitle || "this topic";
+  const compactClaims = base.prompt_claims.slice(0, 4).join(" | ");
+  const genericIntent = /^(let'?s\s+)?(please\s+)?(generate|create|add|give)\s+(me\s+)?((\d+\s+)?more|another|additional)\s+questions?[\.\!\?]*$/i
+    .test(instruction.trim());
+  const extraGuidance = genericIntent ? "" : `\nAdditional guidance from educator: ${instruction.trim()}`;
+  const raw = [
+    `Create one NEW practice question for ${scope}.`,
+    "It must not duplicate the previous question.",
+    `Previous question: ${base.question_text || "(none provided)"}`,
+    `Previous claims: ${compactClaims || "(none provided)"}`,
+    "Keep the same skill level and same general biology context unless extra guidance says otherwise.",
+    extraGuidance,
+  ].filter(Boolean).join("\n");
+  return raw.length > 1800 ? `${raw.slice(0, 1797)}...` : raw;
+}
+
 const STATUS_STYLES: Record<ContentDraft["status"], string> = {
   draft: "bg-slate-100 text-slate-600",
   valid: "bg-emerald-100 text-emerald-700",
@@ -80,17 +135,28 @@ function nextId() {
   return `msg-${msgCounter}`;
 }
 
+function sortQuestionDrafts(drafts: ContentDraft[]): ContentDraft[] {
+  return [...drafts].sort((a, b) => {
+    const createdDelta = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+    if (createdDelta !== 0) return createdDelta;
+    return a.id.localeCompare(b.id);
+  });
+}
+
+function upsertQuestionDraft(drafts: ContentDraft[], draft: ContentDraft): ContentDraft[] {
+  const byId = new Map(drafts.map((item) => [item.id, item]));
+  byId.set(draft.id, draft);
+  return sortQuestionDrafts(Array.from(byId.values()));
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
-  const draftId = draft.id;
-
-  // ── View toggle ─────────────────────────────────────────────────────────
-  const [view, setView] = useState<ViewMode>("chat");
-
   // ── Shared draft body (kept in sync between both planes) ────────────────
   const [currentDraft, setCurrentDraft] = useState(draft);
+  const [questionDrafts, setQuestionDrafts] = useState<ContentDraft[]>([draft]);
   const body = toActivityBody(currentDraft.body);
+  const draftId = currentDraft.id;
 
   // ── Chat state ──────────────────────────────────────────────────────────
   const initialBody = toActivityBody(draft.body);
@@ -105,7 +171,7 @@ export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
       id: nextId(),
       role: "assistant",
       text: hasExistingContent
-        ? "I've put together a practice question based on your description. You can see it in the preview card below. Keep chatting to refine it, or switch to the Form tab to edit any field directly."
+        ? "I've put together a practice question based on your description. You can see it in the preview card below. Keep chatting to refine it, or edit any field directly in the manual form."
         : "Describe what you want learners to practice — a topic, a concept, a scenario. I'll put together a practice question for you.",
     });
     return msgs;
@@ -113,6 +179,7 @@ export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
   const [chatInput, setChatInput] = useState("");
   const [chatBusy, setChatBusy] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
+  const [lastGenerationContext, setLastGenerationContext] = useState<ActivityBody>(initialBody);
   const chatBottomRef = useRef<HTMLDivElement>(null);
 
   // ── Form state (synced from draft body) ─────────────────────────────────
@@ -137,22 +204,76 @@ export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
     draft.status === "published" && draft.slug ? draft.slug : null,
   );
 
+  // ── Release (Go Live) state ──────────────────────────────────────────────
+  const [releasing, setReleasing] = useState(false);
+  const [releaseError, setReleaseError] = useState<string | null>(null);
+  const [isLive, setIsLive] = useState(false);
+
   // ── Scroll chat to bottom on new messages ───────────────────────────────
   useEffect(() => {
     chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadQuestionDrafts() {
+      if (!draft.activityGroupId) {
+        setQuestionDrafts((prev) => upsertQuestionDraft(prev, draft));
+        return;
+      }
+
+      try {
+        const result = await apiFetch<{ drafts: ContentDraft[] }>(
+          "/api/thinkertools-missions-create/drafts",
+        );
+        if (!mounted) return;
+
+        const siblings = result.drafts.filter(
+          (item) =>
+            item.contentType === "activity" &&
+            item.activityGroupId === draft.activityGroupId,
+        );
+        setQuestionDrafts(upsertQuestionDraft(siblings, draft));
+      } catch {
+        if (mounted) setQuestionDrafts((prev) => upsertQuestionDraft(prev, draft));
+      }
+    }
+
+    void loadQuestionDrafts();
+    return () => {
+      mounted = false;
+    };
+  }, [draft]);
+
   // ── Sync form fields whenever the draft body changes ────────────────────
   function syncFormFromDraft(updated: ContentDraft) {
+    const mergedDraft: ContentDraft = {
+      ...updated,
+      trainingTitle: updated.trainingTitle ?? currentDraft.trainingTitle ?? null,
+      activityGroupTitle: updated.activityGroupTitle ?? currentDraft.activityGroupTitle ?? null,
+    };
     const b = toActivityBody(updated.body);
-    setCurrentDraft(updated);
-    setTitle(updated.title);
+    setCurrentDraft(mergedDraft);
+    setTitle(mergedDraft.title);
     setQuestionText(b.question_text);
     setPromptClaimsRaw(b.prompt_claims.join("\n"));
     setCorrectAnswerLabels(b.correct_answer_labels.join(", "));
     setExplanation(b.explanation);
     setExpectedAnswerCount(b.expected_answer_count);
-    onDraftChange(updated);
+    setLastGenerationContext(b);
+    setPublishedSlug(mergedDraft.status === "published" && mergedDraft.slug ? mergedDraft.slug : null);
+    setIsLive(false);
+    setQuestionDrafts((prev) => upsertQuestionDraft(prev, mergedDraft));
+    onDraftChange(mergedDraft);
+  }
+
+  function selectQuestionDraft(nextDraft: ContentDraft) {
+    setSaveError(null);
+    setSaveSuccess(false);
+    setPublishError(null);
+    setReleaseError(null);
+    syncFormFromDraft(nextDraft);
   }
 
   // ── Chat submit ──────────────────────────────────────────────────────────
@@ -166,13 +287,60 @@ export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
     setMessages((prev) => [...prev, { id: nextId(), role: "user", text }]);
     setChatBusy(true);
 
-    const hasDraftContent =
-      body.question_text || body.prompt_claims.length > 0;
+    const hasDraftContent = hasActivityBodyContent(body);
 
     try {
-      let result: { draft: ContentDraft };
+      let result: { draft: ContentDraft } | null = null;
 
-      if (!hasDraftContent) {
+      if (hasDraftContent && isAdditiveQuestionRequest(text)) {
+        const iterations = requestedAdditionalQuestionCount(text);
+        const seedBase = hasActivityBodyContent(lastGenerationContext) ? lastGenerationContext : body;
+
+        let nextSeed = seedBase;
+        for (let i = 0; i < iterations; i += 1) {
+          const createResult = await apiFetch<{ draft: ContentDraft }>(
+            "/api/thinkertools-missions-create/drafts",
+            {
+              method: "POST",
+              body: JSON.stringify({
+                contentType: "activity",
+                primaryTrainingId: currentDraft.primaryTrainingId,
+                activityGroupId: currentDraft.activityGroupId,
+                title: currentDraft.title || undefined,
+              }),
+            },
+          );
+
+          const generated = await apiFetch<{ draft: ContentDraft }>(
+            `/api/thinkertools-missions-create/drafts/${createResult.draft.id}/generate`,
+            {
+              method: "POST",
+              body: JSON.stringify({
+                description: buildAdditionalQuestionDescription(
+                  nextSeed,
+                  text,
+                  currentDraft.trainingTitle,
+                  currentDraft.activityGroupTitle,
+                ),
+              }),
+            },
+          );
+
+          const generatedBody = toActivityBody(generated.draft.body);
+          nextSeed = generatedBody;
+          setQuestionDrafts((prev) => upsertQuestionDraft(prev, generated.draft));
+        }
+
+        setLastGenerationContext(nextSeed);
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: nextId(),
+            role: "assistant",
+            text: `Done — added ${iterations} new question${iterations > 1 ? "s" : ""}. Use the question selector in the manual form to review and edit them.`,
+          },
+        ]);
+      } else if (!hasDraftContent) {
         // First message — generate from scratch
         result = await apiFetch<{ draft: ContentDraft }>(
           `/api/thinkertools-missions-create/drafts/${draftId}/generate`,
@@ -185,7 +353,7 @@ export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
           {
             id: nextId(),
             role: "assistant",
-            text: `Done! I've drafted an activity: ${summary}. Switch to the Form tab to review every field, or keep chatting to refine it.`,
+            text: `Done! I've drafted an activity: ${summary}. Review every field in the manual form, or keep chatting to refine it.`,
           },
         ]);
       } else {
@@ -206,7 +374,9 @@ export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
         ]);
       }
 
-      syncFormFromDraft(result.draft);
+      if (result) {
+        syncFormFromDraft(result.draft);
+      }
     } catch (err) {
       const msg = isApiRequestError(err) ? err.message : "Something went wrong.";
       setChatError(msg);
@@ -283,11 +453,32 @@ export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
     }
   }
 
+  // ── Release (Go Live) ────────────────────────────────────────────────────
+  async function handleRelease() {
+    setReleasing(true);
+    setReleaseError(null);
+    try {
+      await apiFetch(
+        `/api/thinkertools-missions-create/drafts/${draftId}/release`,
+        { method: "POST" },
+      );
+      setIsLive(true);
+    } catch (err) {
+      setReleaseError(isApiRequestError(err) ? err.message : "Failed to go live.");
+    } finally {
+      setReleasing(false);
+    }
+  }
+
   const validationIssues: ValidationIssue[] = Array.isArray(currentDraft.validationIssues)
     ? currentDraft.validationIssues
     : [];
 
-  const hasDraftContent = body.question_text || body.prompt_claims.length > 0;
+  const hasDraftContent = hasActivityBodyContent(body);
+  const activeQuestionIndex = Math.max(
+    0,
+    questionDrafts.findIndex((item) => item.id === currentDraft.id),
+  );
 
   // ─── Render ───────────────────────────────────────────────────────────────
 
@@ -295,7 +486,7 @@ export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
     <div className="flex flex-col gap-0 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
 
       {/* ── Top bar ──────────────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
         {/* Left: status + source */}
         <div className="flex items-center gap-2">
           <span
@@ -303,38 +494,19 @@ export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
           >
             {STATUS_LABELS[currentDraft.status]}
           </span>
-          <DraftSourceBadge aiSource={currentDraft.aiSource} />
+          {currentDraft.activityGroupTitle ? (
+            <span className="inline-flex items-center gap-1 rounded-full bg-cyan-100 px-2 py-0.5 text-[11px] font-medium text-cyan-700">
+              <span className="h-1.5 w-1.5 rounded-full bg-cyan-500" aria-hidden="true" />
+              {currentDraft.activityGroupTitle}
+            </span>
+          ) : (
+            <DraftSourceBadge aiSource={currentDraft.aiSource} />
+          )}
           {validationIssues.length > 0 ? (
             <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[11px] font-medium text-rose-600">
               {validationIssues.length} issue{validationIssues.length !== 1 ? "s" : ""}
             </span>
           ) : null}
-        </div>
-
-        {/* Centre: view toggle */}
-        <div className="flex rounded-lg border border-slate-200 bg-slate-50 p-0.5">
-          <button
-            type="button"
-            onClick={() => setView("chat")}
-            className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
-              view === "chat"
-                ? "bg-white text-slate-900 shadow-sm"
-                : "text-slate-500 hover:text-slate-700"
-            }`}
-          >
-            AI Chat
-          </button>
-          <button
-            type="button"
-            onClick={() => setView("form")}
-            className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
-              view === "form"
-                ? "bg-white text-slate-900 shadow-sm"
-                : "text-slate-500 hover:text-slate-700"
-            }`}
-          >
-            Form
-          </button>
         </div>
 
         {/* Right: actions */}
@@ -353,13 +525,36 @@ export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
           >
             {publishing ? "Publishing…" : "Publish"}
           </button>
+          {currentDraft.status === "published" && publishedSlug && !isLive ? (
+            <button
+              type="button"
+              onClick={handleRelease}
+              disabled={releasing}
+              className="rounded-md bg-blue-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-600 disabled:opacity-40"
+            >
+              {releasing ? "Going Live…" : "Go Live"}
+            </button>
+          ) : null}
         </div>
       </div>
 
       {/* ── Publish success / error banners ──────────────────────────────── */}
-      {publishedSlug ? (
-        <div className="border-b border-emerald-100 bg-emerald-50 px-4 py-2 text-xs text-emerald-700">
+      {publishedSlug && !isLive ? (
+        <div className="border-b border-blue-100 bg-blue-50 px-4 py-2 text-xs text-blue-700">
           Published as <span className="font-mono font-semibold">{publishedSlug}</span>
+          {" · "}
+          <span className="font-medium">Status: Pending</span>
+          {" · "}
+          Click &quot;Go Live&quot; to make it visible to players
+        </div>
+      ) : null}
+      {isLive ? (
+        <div className="border-b border-emerald-100 bg-emerald-50 px-4 py-2 text-xs text-emerald-700">
+          <span className="font-mono font-semibold">{publishedSlug}</span>
+          {" · "}
+          <span className="font-medium">Status: Live</span>
+          {" · "}
+          Now visible to players
         </div>
       ) : null}
       {publishError ? (
@@ -367,28 +562,38 @@ export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
           {publishError}
         </div>
       ) : null}
+      {releaseError ? (
+        <div className="border-b border-rose-100 bg-rose-50 px-4 py-2 text-xs text-rose-700">
+          {releaseError}
+        </div>
+      ) : null}
 
-      {/* ══════════════════════════════════════════════════════════════════ */}
-      {/* AI CHAT PLANE                                                      */}
-      {/* ══════════════════════════════════════════════════════════════════ */}
-      {view === "chat" ? (
-        <div className="flex flex-col" style={{ minHeight: "520px" }}>
+      <div className="grid min-h-[620px] lg:grid-cols-[minmax(0,0.95fr)_minmax(420px,1.05fr)]">
+        {/* ══════════════════════════════════════════════════════════════════ */}
+        {/* AI CHAT PLANE                                                      */}
+        {/* ══════════════════════════════════════════════════════════════════ */}
+        <section className="flex min-h-[520px] flex-col border-b border-slate-100 lg:border-b-0 lg:border-r">
+          <div className="border-b border-slate-100 px-4 py-3">
+            <h2 className="text-sm font-semibold text-slate-800">AI Chat</h2>
+            <p className="mt-0.5 text-xs text-slate-400">Ask for drafts, revisions, or extra questions.</p>
+          </div>
 
           {/* Message list */}
           <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
             {messages.map((msg) => (
-              <div
-                key={msg.id}
-                className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
-              >
+              <div key={msg.id} className="space-y-2">
                 <div
-                  className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
-                    msg.role === "user"
-                      ? "bg-slate-900 text-white"
-                      : "bg-slate-100 text-slate-800"
-                  }`}
+                  className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
                 >
-                  {msg.text}
+                  <div
+                    className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
+                      msg.role === "user"
+                        ? "bg-slate-900 text-white"
+                        : "bg-slate-100 text-slate-800"
+                    }`}
+                  >
+                    {msg.text}
+                  </div>
                 </div>
               </div>
             ))}
@@ -451,7 +656,7 @@ export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
               disabled={chatBusy}
               placeholder={
                 hasDraftContent
-                  ? "Refine: make it harder, add a claim, change the topic…"
+                  ? "Refine this question, or ask for more questions…"
                   : "Describe what you want learners to practice…"
               }
               className="flex-1 rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-slate-400 focus:bg-white focus:outline-none disabled:opacity-60"
@@ -467,14 +672,40 @@ export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
           {chatError ? (
             <p className="px-4 pb-3 text-xs text-rose-600">{chatError}</p>
           ) : null}
-        </div>
-      ) : null}
+        </section>
 
-      {/* ══════════════════════════════════════════════════════════════════ */}
-      {/* FORM PLANE                                                         */}
-      {/* ══════════════════════════════════════════════════════════════════ */}
-      {view === "form" ? (
+        {/* ══════════════════════════════════════════════════════════════════ */}
+        {/* FORM PLANE                                                         */}
+        {/* ══════════════════════════════════════════════════════════════════ */}
         <form onSubmit={handleSave} className="space-y-4 px-5 py-5">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-800">Manual Form</h2>
+            <p className="mt-0.5 text-xs text-slate-400">Edit fields directly and save the draft.</p>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+            <p className="mb-2 text-xs font-medium text-slate-500">Question</p>
+            <div className="flex flex-wrap gap-2">
+              {questionDrafts.map((questionDraft, index) => (
+                <button
+                  key={questionDraft.id}
+                  type="button"
+                  onClick={() => selectQuestionDraft(questionDraft)}
+                  disabled={saving || questionDraft.id === currentDraft.id}
+                  aria-current={questionDraft.id === currentDraft.id ? "true" : undefined}
+                  className={`flex h-8 min-w-8 items-center justify-center rounded-md border px-2 text-xs font-semibold transition-colors ${
+                    questionDraft.id === currentDraft.id
+                      ? "border-slate-900 bg-white text-slate-900 shadow-sm"
+                      : "border-slate-200 bg-white text-slate-500 hover:border-slate-400 hover:text-slate-800"
+                  } disabled:cursor-default disabled:opacity-100`}
+                >
+                  {index + 1}
+                </button>
+              ))}
+            </div>
+            <p className="mt-2 text-[11px] text-slate-400">
+              Editing question {activeQuestionIndex + 1} of {questionDrafts.length}.
+            </p>
+          </div>
           <p className="text-xs text-slate-400">
             Fields stay in sync with the AI chat. Saving here updates the draft.
           </p>
@@ -593,7 +824,7 @@ export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
             {saveError ? <span className="text-xs text-rose-700">{saveError}</span> : null}
           </div>
         </form>
-      ) : null}
+      </div>
     </div>
   );
 }

@@ -118,14 +118,15 @@ export async function POST(request: Request, context: RouteContext) {
     const newOrigin: DraftOrigin =
       draft.origin === "manual" ? "co_authored" : draft.origin;
 
-    // If a published draft is refined, return it to draft status
-    const newStatus = draft.status === "published" ? "draft" : draft.status;
+    // If a published draft is refined, return it to draft status.
+    // Otherwise, since validation passed, promote to 'valid'.
+    const newStatus = draft.status === "published" ? "draft" : "valid";
 
     // ── Persist ───────────────────────────────────────────────────────────
     const updated = await updateDraft(draft.id, {
       body: result.output,
       origin: newOrigin,
-      status: newStatus === "published" ? "draft" : "valid",
+      status: newStatus,
       validationIssues: [],
       aiSource: result.source,
       aiModel: result.model,

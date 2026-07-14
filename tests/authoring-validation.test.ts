@@ -172,7 +172,8 @@ test("validateDraft(activity) reports error for duplicate claim labels", () => {
 });
 
 test("validateDraft(activity) reports zod error for missing required field", () => {
-  const { question_text: _omit, ...body } = validActivityBody();
+  const body: Partial<ReturnType<typeof validActivityBody>> = validActivityBody();
+  delete body.question_text;
   const issues = validateDraft("activity", body);
   assert.ok(issues.length > 0, "should report zod validation issues");
 });
@@ -271,7 +272,8 @@ test("validateDraft(mission) reports missing_resolution_option when resolution_r
 });
 
 test("validateDraft(mission) reports zod error for missing required field", () => {
-  const { narrative_hook: _omit, ...body } = validMissionBody();
+  const body: Partial<ReturnType<typeof validMissionBody>> = validMissionBody();
+  delete body.narrative_hook;
   const issues = validateDraft("mission", body);
   assert.ok(issues.length > 0, "should report zod validation issues");
 });

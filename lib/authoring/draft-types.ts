@@ -21,4 +21,6 @@ export type ContentDraft = {
   createdBy: string | null;
   createdAt: string;
   updatedAt: string;
+  trainingTitle?: string | null;
+  activityGroupTitle?: string | null;
 };

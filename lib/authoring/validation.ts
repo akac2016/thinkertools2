@@ -2,8 +2,8 @@ import { activityBodySchema } from "./activity-schema.ts";
 import { missionBodySchema } from "./mission-schema.ts";
 import type { DraftContentType, ValidationIssue } from "./draft-types.ts";
 import {
-  extractPromptClaims,
   normalizeLabelSelection,
+  parsePromptClaim,
 } from "../quests/contradiction-spotting.ts";
 
 // ---------------------------------------------------------------------------
@@ -42,16 +42,29 @@ function validateActivity(body: unknown): ValidationIssue[] {
         message: issue.message,
       });
     }
-    // If the schema parse failed we can't safely run the cross-field checks
+  }
+
+  const candidate = parsed.success
+    ? parsed.data
+    : typeof body === "object" && body !== null
+      ? body as Record<string, unknown>
+      : null;
+
+  const promptClaims = candidate?.prompt_claims;
+  const correctAnswerLabels = candidate?.correct_answer_labels;
+  if (
+    !Array.isArray(promptClaims)
+    || !promptClaims.every((claim): claim is string => typeof claim === "string")
+    || !Array.isArray(correctAnswerLabels)
+    || !correctAnswerLabels.every((label): label is string => typeof label === "string")
+  ) {
     return issues;
   }
 
-  const data = parsed.data;
-
   // 2. Unique claim labels — no two prompt_claims should parse to the same label
-  const parsedClaims = extractPromptClaims({
-    prompt_claims: data.prompt_claims,
-  } as Parameters<typeof extractPromptClaims>[0]);
+  const parsedClaims = promptClaims
+    .map((claim, index) => parsePromptClaim(claim, index))
+    .filter((claim): claim is NonNullable<typeof claim> => claim !== null);
 
   const seenLabels = new Set<string>();
   const duplicateLabels = new Set<string>();
@@ -71,7 +84,7 @@ function validateActivity(body: unknown): ValidationIssue[] {
 
   // 3. Every correct_answer_label must resolve to an existing claim label
   const claimLabelSet = new Set(parsedClaims.map((c) => c.label));
-  const normalizedCorrect = normalizeLabelSelection(data.correct_answer_labels);
+  const normalizedCorrect = normalizeLabelSelection(correctAnswerLabels);
   const missingLabels = normalizedCorrect.filter((l) => !claimLabelSet.has(l));
   if (missingLabels.length > 0) {
     issues.push({

@@ -1,3 +1,5 @@
+import { Suspense } from "react";
+
 import { WoiGameWorkspaceScreen } from "@/components/woi/game-workspace-screen";
 
 type WoiGameWorkspacePageProps = {
@@ -6,5 +8,9 @@ type WoiGameWorkspacePageProps = {
 
 export default async function WoiGameWorkspacePage({ params }: WoiGameWorkspacePageProps) {
   const { gameId } = await params;
-  return <WoiGameWorkspaceScreen gameId={gameId} />;
+  return (
+    <Suspense fallback={null}>
+      <WoiGameWorkspaceScreen gameId={gameId} />
+    </Suspense>
+  );
 }

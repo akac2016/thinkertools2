@@ -1,5 +1,11 @@
+import { Suspense } from "react";
+
 import { WoiNewGameScreen } from "@/components/woi/new-game-screen";
 
 export default function WoiNewGamePage() {
-  return <WoiNewGameScreen />;
+  return (
+    <Suspense fallback={null}>
+      <WoiNewGameScreen />
+    </Suspense>
+  );
 }

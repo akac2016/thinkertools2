@@ -26,7 +26,7 @@ export type TrainingRow = {
   title: string;
   description: string;
   max_level: number;
-  is_active: boolean;
+  publication_status: 'pending' | 'live' | 'archived';
   created_at: string;
   updated_at: string;
 };
@@ -47,7 +47,7 @@ export type TrainingActivityRow = {
   overlevel_grace_levels: number;
   round_content: TrainingActivityRoundContent;
   repeatable: boolean;
-  is_active: boolean;
+  publication_status: 'pending' | 'live' | 'archived';
   created_at: string;
   updated_at: string;
 };
@@ -68,7 +68,7 @@ export type MissionRow = {
   completion_criteria: string;
   xp_reward: number;
   rewards_metadata: Record<string, unknown>;
-  is_active: boolean;
+  publication_status: 'pending' | 'live' | 'archived';
   created_at: string;
   updated_at: string;
 };

@@ -16,6 +16,18 @@ import {
   matchConstrainedTypedInput,
   normalizeLabelSelection,
 } from "@/lib/quests";
+import {
+  type ActivityGroupEntry,
+  type ActivityGroupRenderEntry,
+  type MissionEntry,
+  type TrainingEntry,
+  type TrainingRenderEntry,
+  mapTrainingsToRenderEntries,
+  mapActivityGroupsToRenderEntries,
+  mapMissionsToRenderEntries,
+  resolvePhilosophicalReasoningTraining,
+  keyProgressByTrainingId,
+} from "@/lib/quests/learner-view";
 
 import styles from "./thinkertools-missions-chat.module.css";
 
@@ -63,6 +75,14 @@ type ProgressState = {
   totalXp: number;
   xpRequiredForNextLevel: number;
   xpRemainingForNextLevel: number;
+};
+
+type LoadTrainingsResponse = {
+  trainings: TrainingEntry[];
+};
+
+type LoadActivityGroupsResponse = {
+  groups: ActivityGroupEntry[];
 };
 
 type LoadContradictionResponse = {
@@ -230,100 +250,6 @@ const openingMessages: ChatMessage[] = [
   },
 ];
 
-const CONTRADICTION_SPOTTING_SKILL_ID = "philosophical-thinking" as const;
-const AVAILABLE_ACTIVITY_IDS = new Set(["contradiction-spotting"]);
-const CONTRADICTION_SPOTTING_DISPLAY_TITLE = "Contradiction Spotting" as const;
-
-const WRONG_RECRUIT_SLUG = "wrong-recruit" as const;
-
-const placeholderMissions: Mission[] = [
-  {
-    id: WRONG_RECRUIT_SLUG,
-    title: "The Wrong Recruit",
-    status: "Available",
-    requirements: ["Philosophical Reasoning level 1"],
-    revealedFacts: [],
-    definition: undefined,
-  },
-  {
-    id: "missing-premise",
-    title: "Missing Premise",
-    status: "Locked",
-    requirements: ["Complete the first mission intake", "Reveal one player profile field"],
-    revealedFacts: [
-      "This mission appears to involve a flawed argument.",
-      "The supporting evidence has not been unlocked.",
-    ],
-  },
-];
-
-const skills: Skill[] = [
-  {
-    id: "philosophical-thinking",
-    name: "Philosophical Thinking",
-    level: 1,
-    xp: 40,
-    activities: [
-      {
-        id: "contradiction-spotting",
-        level: 1,
-        name: "Contradiction Spotting",
-        xp: 20,
-        status: "Unlocked",
-        requirements: ["Philosophical Thinking level 1"],
-      },
-      {
-        id: "explain-conflict",
-        level: 2,
-        name: "Explain why two claims cannot both hold",
-        xp: 45,
-        status: "Locked",
-        requirements: ["Reach Contradiction Spotting level 2"],
-      },
-      {
-        id: "missing-context",
-        level: 3,
-        name: "Resolve a contradiction under missing context",
-        xp: 80,
-        status: "Locked",
-        requirements: ["Reach Contradiction Spotting level 3"],
-      },
-    ],
-  },
-  {
-    id: "premise-testing",
-    name: "Premise Testing",
-    level: 1,
-    xp: 0,
-    activities: [
-      {
-        id: "unstated-assumption",
-        level: 1,
-        name: "Identify an unstated assumption",
-        xp: 25,
-        status: "Unlocked",
-        requirements: ["Premise Testing level 1"],
-      },
-      {
-        id: "rank-premises",
-        level: 2,
-        name: "Rank premises by evidential strength",
-        xp: 55,
-        status: "Locked",
-        requirements: ["Reach Premise Testing level 2"],
-      },
-      {
-        id: "revise-argument",
-        level: 3,
-        name: "Revise a weak argument without changing its conclusion",
-        xp: 90,
-        status: "Locked",
-        requirements: ["Reach Premise Testing level 3"],
-      },
-    ],
-  },
-];
-
 function getAssistantMessageDelay(message: ChatMessage) {
   const baseDelayMs = 380;
   const perCharacterDelayMs = 14;
@@ -340,7 +266,7 @@ export function ThinkertoolsMissionsChat() {
   const [currentQuestStage, setCurrentQuestStage] = useState<QuestStage>("none");
   const [currentChatScript, setCurrentChatScript] = useState("feed-intro");
   const [selectedMission, setSelectedMission] = useState<Mission | null>(null);
-  const [missions, setMissions] = useState<Mission[]>(placeholderMissions);
+  const [missions, setMissions] = useState<Mission[]>([]);
   const [revealedMissionFactIds, setRevealedMissionFactIds] = useState<Set<string>>(() => new Set());
   const [selectedMissionClaimLabels, setSelectedMissionClaimLabels] = useState<string[]>([]);
   const [missionContradictionResult, setMissionContradictionResult] = useState<MissionContradictionResult | null>(null);
@@ -357,9 +283,25 @@ export function ThinkertoolsMissionsChat() {
   const [trainingError, setTrainingError] = useState<string | null>(null);
   const [initialTrainingProgressLoaded, setInitialTrainingProgressLoaded] = useState(false);
   const [trainingProgress, setTrainingProgress] = useState<ProgressState | null>(null);
+
+  // Data-driven trainings/groups state (task 7.1)
+  const [trainingsData, setTrainingsData] = useState<TrainingRenderEntry[] | null>(null);
+  const [trainingsLoading, setTrainingsLoading] = useState(false);
+  const [trainingsError, setTrainingsError] = useState<string | null>(null);
+  const [groupsByTrainingSlug, setGroupsByTrainingSlug] = useState<Record<string, ActivityGroupRenderEntry[]>>({});
+  const [groupsLoadingBySlug, setGroupsLoadingBySlug] = useState<Record<string, boolean>>({});
+  const [groupsErrorBySlug, setGroupsErrorBySlug] = useState<Record<string, string | null>>({});
+
+  // Data-driven missions state (task 9.1)
+  const [missionsData, setMissionsData] = useState<MissionEntry[] | null>(null);
+  const [missionsLoading, setMissionsLoading] = useState(false);
+  const [missionsError, setMissionsError] = useState<string | null>(null);
+
   const [contradictionRounds, setContradictionRounds] = useState<ContradictionRound[]>([]);
   const [activeRoundSlug, setActiveRoundSlug] = useState("");
   const [activeTrainingInteractionId, setActiveTrainingInteractionId] = useState<string | null>(null);
+  const [activeTrainingSlug, setActiveTrainingSlug] = useState<string | null>(null);
+  const [activeGroupSlug, setActiveGroupSlug] = useState<string | null>(null);
   const [selectedLabels, setSelectedLabels] = useState<string[]>([]);
   const [roundResult, setRoundResult] = useState<SubmitContradictionResponse["result"] | null>(null);
   const [completedRoundSlugs, setCompletedRoundSlugs] = useState<Set<string>>(() => new Set());
@@ -372,14 +314,11 @@ export function ThinkertoolsMissionsChat() {
   // what Kane is doing in the browser.
   const refreshProgress = useCallback(async () => {
     try {
-      const [missionsResponse, trainingResponse] = await Promise.all([
-        apiFetch<LoadMissionsResponse>("/api/thinkertools-missions/missions"),
-        apiFetch<LoadContradictionResponse>("/api/thinkertools-missions/training/contradiction-spotting"),
-      ]);
+      const missionsResponse = await apiFetch<LoadMissionsResponse>(
+        "/api/thinkertools-missions/missions",
+      );
 
-      setTrainingProgress(trainingResponse.progress);
-      setContradictionRounds(trainingResponse.rounds);
-      setCompletedRoundSlugs(new Set(trainingResponse.completedRoundSlugs));
+      setTrainingProgress(missionsResponse.progress);
 
       setMissionCompletions(Object.fromEntries(
         missionsResponse.missions.map((mission) => [
@@ -394,6 +333,9 @@ export function ThinkertoolsMissionsChat() {
         ]),
       ));
 
+      // Keep missionsData in sync for the resolved missions (task 9.1)
+      setMissionsData(missionsResponse.missions);
+
       setMissions((current) => {
         const updated = current.map((m) => {
           const dbMission = missionsResponse.missions.find((r) => r.slug === m.id);
@@ -407,10 +349,154 @@ export function ThinkertoolsMissionsChat() {
         });
         return updated;
       });
+
+      // Refresh rounds for the active group if one is selected
+      if (activeTrainingSlug && activeGroupSlug) {
+        try {
+          const trainingResponse = await apiFetch<LoadContradictionResponse>(
+            `/api/thinkertools-missions/trainings/${activeTrainingSlug}/groups/${activeGroupSlug}/activities`,
+          );
+          setContradictionRounds(trainingResponse.rounds);
+          setCompletedRoundSlugs(new Set(trainingResponse.completedRoundSlugs));
+        } catch {
+          // Silently ignore — rounds will refresh on next activity start
+        }
+      }
     } catch {
       // Silently ignore refresh errors — Kane is still running
     }
+  }, [activeTrainingSlug, activeGroupSlug]);
+
+  // --- Data-driven trainings enumeration (task 7.1) ---
+  const loadTrainings = useCallback(async () => {
+    setTrainingsLoading(true);
+    setTrainingsError(null);
+    try {
+      const response = await apiFetch<LoadTrainingsResponse>(
+        "/api/thinkertools-missions/trainings",
+      );
+      const entries = mapTrainingsToRenderEntries(response.trainings);
+      setTrainingsData(entries);
+    } catch (err) {
+      const message = isApiRequestError(err)
+        ? err.message
+        : "Failed to load trainings";
+      setTrainingsError(message);
+      // Keep already-loaded content rendered (Req 1.6)
+    } finally {
+      setTrainingsLoading(false);
+    }
   }, []);
+
+  const loadGroupsForTraining = useCallback(async (trainingSlug: string) => {
+    setGroupsLoadingBySlug((prev) => ({ ...prev, [trainingSlug]: true }));
+    setGroupsErrorBySlug((prev) => ({ ...prev, [trainingSlug]: null }));
+    try {
+      const response = await apiFetch<LoadActivityGroupsResponse>(
+        `/api/thinkertools-missions/trainings/${trainingSlug}/groups`,
+      );
+      const entries = mapActivityGroupsToRenderEntries(response.groups);
+      setGroupsByTrainingSlug((prev) => ({ ...prev, [trainingSlug]: entries }));
+    } catch (err) {
+      const message = isApiRequestError(err)
+        ? err.message
+        : "Failed to load activity groups";
+      setGroupsErrorBySlug((prev) => ({ ...prev, [trainingSlug]: message }));
+    } finally {
+      setGroupsLoadingBySlug((prev) => ({ ...prev, [trainingSlug]: false }));
+    }
+  }, []);
+
+  // --- Data-driven missions loading (task 9.1) ---
+  const loadMissions = useCallback(async () => {
+    setMissionsLoading(true);
+    setMissionsError(null);
+    try {
+      const response = await apiFetch<LoadMissionsResponse>(
+        "/api/thinkertools-missions/missions",
+      );
+      setMissionsData(response.missions);
+      setTrainingProgress(response.progress);
+      setMissionCompletions(Object.fromEntries(
+        response.missions.map((mission) => [
+          mission.slug,
+          {
+            isCompleted: mission.isCompleted,
+            completedAt: mission.completedAt,
+            awardedXp: mission.awardedXp,
+            replayCount: mission.replayCount,
+            canReplay: mission.canReplay,
+          },
+        ]),
+      ));
+
+      // Update the missions list with live data from the DB
+      setMissions((current) => {
+        const updated = current.map((m) => {
+          const dbMission = response.missions.find((r) => r.slug === m.id);
+          if (!dbMission) return m;
+          return {
+            ...m,
+            id: dbMission.slug,
+            title: dbMission.title,
+            status: dbMission.isActive ? ("Available" as const) : ("Locked" as const),
+          };
+        });
+
+        // Add any new missions from the DB that aren't already in the list
+        const newMissions = response.missions
+          .filter((r) => !current.some((m) => m.id === r.slug))
+          .map((r) => ({
+            id: r.slug,
+            title: r.title,
+            status: r.isActive ? ("Available" as const) : ("Locked" as const),
+            requirements: [],
+            revealedFacts: [],
+            definition: undefined,
+          }));
+
+        return response.missions.length > 0 ? [...updated, ...newMissions] : current;
+      });
+    } catch (err) {
+      const message = isApiRequestError(err)
+        ? err.message
+        : "Failed to load missions";
+      setMissionsError(message);
+      // Keep already-loaded content rendered (Req 1.6)
+    } finally {
+      setMissionsLoading(false);
+      setMissionProgressLoaded(true);
+    }
+  }, []);
+
+  // Resolve missions from DB data (Req 6.3, 6.4 — no fallback to constants)
+  const resolvedMissions = useMemo(() => {
+    if (!missionsData) {
+      return { source: "data" as const, entries: [] as { slug: string; title: string; isActive: boolean }[] };
+    }
+    return { source: "data" as const, entries: mapMissionsToRenderEntries(missionsData) };
+  }, [missionsData]);
+
+  // Resolve trainings from DB data (Req 6.3, 6.4 — no fallback to constants)
+  const resolvedTrainings = useMemo(() => {
+    if (!trainingsData || trainingsData.length === 0) {
+      return { source: "data" as const, entries: [] as TrainingRenderEntry[] };
+    }
+    return { source: "data" as const, entries: trainingsData };
+  }, [trainingsData]);
+
+  // Resolve the philosophical-reasoning training by slug (Req 5.1, 5.4)
+  const philosophicalReasoningTraining = useMemo(() => {
+    return resolvePhilosophicalReasoningTraining(resolvedTrainings.entries);
+  }, [resolvedTrainings.entries]);
+
+  // Key progress by training id (Req 5.2, 5.3)
+  const progressByTrainingId = useMemo(() => {
+    if (!philosophicalReasoningTraining || !trainingProgress) {
+      return null;
+    }
+    return keyProgressByTrainingId(philosophicalReasoningTraining.id, trainingProgress);
+  }, [philosophicalReasoningTraining, trainingProgress]);
 
   const activeRound = useMemo(
     () => contradictionRounds.find((round) => round.slug === activeRoundSlug) ?? null,
@@ -468,7 +554,9 @@ export function ThinkertoolsMissionsChat() {
   }
 
   function getSkillProgressDisplay(skill: Skill) {
-    if (skill.id === CONTRADICTION_SPOTTING_SKILL_ID) {
+    // Resolve progress by training id (Req 5.2, 5.3, 5.4)
+    // Match by the resolved philosophical-reasoning training id
+    if (philosophicalReasoningTraining && skill.id === philosophicalReasoningTraining.id) {
       if (!initialTrainingProgressLoaded) {
         return {
           level: null,
@@ -479,7 +567,7 @@ export function ThinkertoolsMissionsChat() {
         };
       }
 
-      if (!trainingProgress) {
+      if (!progressByTrainingId) {
         return {
           level: null,
           xp: null,
@@ -490,10 +578,10 @@ export function ThinkertoolsMissionsChat() {
       }
 
       return {
-        level: trainingProgress.currentLevel,
-        xp: trainingProgress.totalXp,
-        levelXp: trainingProgress.currentLevelXp,
-        xpRequiredForNextLevel: trainingProgress.xpRequiredForNextLevel,
+        level: progressByTrainingId.level,
+        xp: progressByTrainingId.totalXp,
+        levelXp: progressByTrainingId.xp,
+        xpRequiredForNextLevel: progressByTrainingId.xpRequiredForNextLevel,
         status: activeTrainingSkillId === skill.id ? "active" as const : "loaded" as const,
       };
     }
@@ -508,12 +596,14 @@ export function ThinkertoolsMissionsChat() {
   }
 
   function getSkillLevel(skill: Skill) {
+    // Use progress keyed by training id when available (Req 5.2, 5.3)
     if (
-      skill.id === CONTRADICTION_SPOTTING_SKILL_ID
+      philosophicalReasoningTraining
+      && skill.id === philosophicalReasoningTraining.id
       && initialTrainingProgressLoaded
-      && trainingProgress
+      && progressByTrainingId
     ) {
-      return trainingProgress.currentLevel;
+      return progressByTrainingId.level;
     }
 
     return skill.level;
@@ -528,27 +618,11 @@ export function ThinkertoolsMissionsChat() {
   }
 
   function getActivityStatusLabel(skill: Skill, activity: SkillActivity) {
-    if (isActivityUnlocked(skill, activity) && !AVAILABLE_ACTIVITY_IDS.has(activity.id)) {
-      return "Coming soon";
-    }
-
     return isActivityUnlocked(skill, activity) ? "Unlocked" : "Locked";
   }
 
-  function getActivityRequirements(skill: Skill, activity: SkillActivity) {
-    if (skill.id === CONTRADICTION_SPOTTING_SKILL_ID) {
-      return [`Reach Philosophical Thinking level ${activity.level}`];
-    }
-
+  function getActivityRequirements(_skill: Skill, activity: SkillActivity) {
     return activity.requirements;
-  }
-
-  function getUnavailableActivityMessage(activity: SkillActivity) {
-    if (AVAILABLE_ACTIVITY_IDS.has(activity.id)) {
-      return null;
-    }
-
-    return "Training content for this activity has not been added yet.";
   }
 
   function getMissionCompletion(mission: Mission) {
@@ -572,118 +646,37 @@ export function ThinkertoolsMissionsChat() {
     return getMissionCompletion(mission)?.isCompleted ? "Replay Mission" : "Start Mission";
   }
 
+  // Load trainings on mount (Req 1.2, 1.3, 1.5, 1.6, 1.7)
   useEffect(() => {
-    let mounted = true;
+    void loadTrainings();
+  }, [loadTrainings]);
 
-    const loadMissionProgress = async () => {
-      try {
-        const response = await apiFetch<LoadMissionsResponse>("/api/thinkertools-missions/missions");
-
-        if (!mounted) {
-          return;
-        }
-
-        setTrainingProgress(response.progress);
-        setMissionCompletions(Object.fromEntries(
-          response.missions.map((mission) => [
-            mission.slug,
-            {
-              isCompleted: mission.isCompleted,
-              completedAt: mission.completedAt,
-              awardedXp: mission.awardedXp,
-              replayCount: mission.replayCount,
-              canReplay: mission.canReplay,
-            },
-          ]),
-        ));
-
-        // Update the missions list with live titles from the DB, preserving
-        // the locked placeholder and any already-loaded definitions.
-        setMissions((current) => {
-          const dbSlugs = new Set(response.missions.map((m) => m.slug));
-          const updated = current.map((m) => {
-            const dbMission = response.missions.find((r) => r.slug === m.id);
-            if (!dbMission) {
-              return m;
-            }
-
-            return {
-              ...m,
-              id: dbMission.slug,
-              title: dbMission.title,
-              status: dbMission.isActive ? ("Available" as const) : ("Locked" as const),
-            };
-          });
-
-          // Add any new missions from the DB that aren't already in the list
-          const newMissions = response.missions
-            .filter((r) => !current.some((m) => m.id === r.slug))
-            .map((r) => ({
-              id: r.slug,
-              title: r.title,
-              status: r.isActive ? ("Available" as const) : ("Locked" as const),
-              requirements: [],
-              revealedFacts: [],
-              definition: undefined,
-            }));
-
-          return dbSlugs.size > 0 ? [...updated, ...newMissions] : current;
-        });
-      } catch {
-        if (!mounted) {
-          return;
-        }
-
-        setMissionCompletions({});
-      } finally {
-        if (mounted) {
-          setMissionProgressLoaded(true);
-        }
+  // Load groups for each training once trainings are loaded (Req 2.3)
+  useEffect(() => {
+    if (!trainingsData || trainingsData.length === 0) {
+      return;
+    }
+    for (const training of trainingsData) {
+      if (!groupsByTrainingSlug[training.slug] && !groupsLoadingBySlug[training.slug]) {
+        void loadGroupsForTraining(training.slug);
       }
-    };
+    }
+  }, [trainingsData, groupsByTrainingSlug, groupsLoadingBySlug, loadGroupsForTraining]);
 
-    void loadMissionProgress();
-
-    return () => {
-      mounted = false;
-    };
-  }, []);
+  // Load missions on mount (Req 4.4, 4.6, 4.7, 6.1) — task 9.1
+  useEffect(() => {
+    void loadMissions();
+  }, [loadMissions]);
 
   useEffect(() => {
-    let mounted = true;
-
-    const loadInitialTrainingProgress = async () => {
-      try {
-        const response = await apiFetch<LoadContradictionResponse>(
-          "/api/thinkertools-missions/training/contradiction-spotting",
-        );
-
-        if (!mounted) {
-          return;
-        }
-
-        setTrainingProgress(response.progress);
-        setContradictionRounds(response.rounds);
-        setCompletedRoundSlugs(new Set(response.completedRoundSlugs));
-      } catch {
-        if (!mounted) {
-          return;
-        }
-
-        setTrainingProgress(null);
-      } finally {
-        if (mounted) {
-          setInitialTrainingProgressLoaded(true);
-        }
-      }
-    };
-
-    void loadInitialTrainingProgress();
-
-    return () => {
-      mounted = false;
-    };
-  }, []);
+    // Training progress is loaded via the missions endpoint (loadMissions).
+    // Rounds and completedRoundSlugs are loaded when a specific activity group
+    // is selected (startActivity). No legacy flat route needed.
+    // Mark initial progress as loaded once missions data arrives.
+    if (missionProgressLoaded && !initialTrainingProgressLoaded) {
+      setInitialTrainingProgressLoaded(true);
+    }
+  }, [missionProgressLoaded, initialTrainingProgressLoaded]);
 
   useEffect(() => {
     if (assistantQueue.length === 0) {
@@ -1309,17 +1302,20 @@ export function ThinkertoolsMissionsChat() {
     if (!definition && mission.status === "Available") {
       definition = await loadMissionDefinition(mission.id);
       if (definition) {
+        const loadedDefinition = definition;
         setMissions((current) =>
           current.map((m) =>
-            m.id === mission.id ? { ...m, definition, revealedFacts: definition!.stages[0].revealedFactIds
+            m.id === mission.id ? { ...m, definition: loadedDefinition, revealedFacts: loadedDefinition.stages[0].revealedFactIds
               .flatMap((factId) => {
-                const fact = definition!.facts.find((f) => f.id === factId);
+                const fact = loadedDefinition.facts.find((f) => f.id === factId);
                 return fact ? [fact.body] : [];
               }) } : m,
           ),
         );
         // Update selectedMission with the loaded definition
-        setSelectedMission((current) => current?.id === mission.id ? { ...current, definition } : current);
+        setSelectedMission((current) => current?.id === mission.id
+          ? { ...current, definition: loadedDefinition }
+          : current);
       }
     }
 
@@ -1350,8 +1346,9 @@ export function ThinkertoolsMissionsChat() {
     if (!definition) {
       definition = await loadMissionDefinition(mission.id);
       if (definition) {
+        const loadedDefinition = definition;
         setMissions((current) =>
-          current.map((m) => m.id === mission.id ? { ...m, definition } : m),
+          current.map((m) => m.id === mission.id ? { ...m, definition: loadedDefinition } : m),
         );
       }
     }
@@ -1396,10 +1393,24 @@ export function ThinkertoolsMissionsChat() {
     setDraft("");
     appendUserMessage(`Start activity: ${activity.name}`);
 
+    // Resolve the training slug from the selected skill (Req 2.4)
+    const trainingSlug = resolvedTrainings.entries.find(
+      (t) => t.id === skill.id,
+    )?.slug;
+    const groupSlug = activity.id;
+
+    // Track active training/group slugs for submit (task 8.1)
+    setActiveTrainingSlug(trainingSlug ?? null);
+    setActiveGroupSlug(groupSlug);
+
     try {
-      const response = await apiFetch<LoadContradictionResponse>(
-        "/api/thinkertools-missions/training/contradiction-spotting",
-      );
+      // Use the nested group-scoped route (Req 2.4, 6.4)
+      if (!trainingSlug) {
+        throw new Error("Training slug could not be resolved");
+      }
+      const endpoint = `/api/thinkertools-missions/trainings/${trainingSlug}/groups/${groupSlug}/activities`;
+
+      const response = await apiFetch<LoadContradictionResponse>(endpoint);
       const persistedCompletedRoundSlugs = new Set(response.completedRoundSlugs);
       const firstRound = response.rounds.find((round) => !persistedCompletedRoundSlugs.has(round.slug))
         ?? response.rounds[0]
@@ -1411,6 +1422,7 @@ export function ThinkertoolsMissionsChat() {
       setActiveRoundSlug(firstRound?.slug ?? "");
       setCurrentChatScript(`activity-${activity.id}`);
       if (!firstRound) {
+        // Group with rounds: [] shows empty-state (Req 2.7)
         setActiveTrainingInteractionId(null);
         setAssistantQueue((current) => [
           ...current,
@@ -1418,7 +1430,7 @@ export function ThinkertoolsMissionsChat() {
             id: getMessageId(`a-activity-${activity.id}`),
             role: "assistant",
             name: "Mission Guide",
-            body: "No Contradiction Spotting training content is available yet.",
+            body: "No training content is available for this activity group yet.",
           },
         ]);
         return;
@@ -1433,8 +1445,8 @@ export function ThinkertoolsMissionsChat() {
           role: "assistant",
           name: "Mission Guide",
           body: firstRound.expectedAnswerCount === 1
-            ? "Contradiction Spotting is ready. Select or type one label."
-            : "Contradiction Spotting is ready. Select or type two labels.",
+            ? `${activity.name} is ready. Select or type one label.`
+            : `${activity.name} is ready. Select or type two labels.`,
           trainingRound: {
             interactionId,
             round: firstRound,
@@ -1447,7 +1459,7 @@ export function ThinkertoolsMissionsChat() {
     } catch (loadError) {
       const message = isApiRequestError(loadError)
         ? loadError.message
-        : "Failed to load Contradiction Spotting.";
+        : `Failed to load ${activity.name}.`;
       setTrainingError(message);
       setAssistantQueue((current) => [
         ...current,
@@ -1518,8 +1530,16 @@ export function ThinkertoolsMissionsChat() {
     setTrainingError(null);
 
     try {
+      // Use the nested group-scoped submit route (Req 2.4, 6.4)
+      if (!activeTrainingSlug || !activeGroupSlug) {
+        setTrainingError("Training or group context is missing.");
+        setSubmittingTraining(false);
+        return;
+      }
+      const endpoint = `/api/thinkertools-missions/trainings/${activeTrainingSlug}/groups/${activeGroupSlug}/activities/submit`;
+
       const response = await apiFetch<SubmitContradictionResponse>(
-        "/api/thinkertools-missions/training/contradiction-spotting/submit",
+        endpoint,
         {
           method: "POST",
           body: JSON.stringify({
@@ -1695,42 +1715,70 @@ export function ThinkertoolsMissionsChat() {
           <aside className={styles.skillsPanel} aria-label="Player skills">
             <div className={styles.panelHeading}>
               <h2>Training</h2>
+              {trainingsError && (
+                <button
+                  className={styles.panelActionButton}
+                  onClick={() => void loadTrainings()}
+                  type="button"
+                >
+                  Retry
+                </button>
+              )}
             </div>
+            {trainingsError && (
+              <p className={styles.trainingError}>{trainingsError}</p>
+            )}
+            {trainingsLoading && !trainingsData && (
+              <p>Loading trainings...</p>
+            )}
+            {!trainingsLoading && !trainingsError && resolvedTrainings.entries.length === 0 && (
+              <p className={styles.emptyDetails}>No trainings are currently available.</p>
+            )}
+            {/* Req 5.5: missing philosophical-reasoning → error, no level/XP */}
+            {!trainingsLoading && !trainingsError && resolvedTrainings.source === "data" && !philosophicalReasoningTraining && (
+              <p className={styles.trainingError}>Training could not be found.</p>
+            )}
             <div className={styles.skillList}>
-              {skills.map((skill) => (
-                (() => {
-                  const skillProgress = getSkillProgressDisplay(skill);
+              {resolvedTrainings.entries.map((training) => {
+                // Build a Skill-compatible object for getSkillProgressDisplay
+                const skillCompat: Skill = {
+                  id: training.id,
+                  name: training.title,
+                  level: 1,
+                  xp: 0,
+                  activities: [],
+                };
+                const skillProgress = getSkillProgressDisplay(skillCompat);
 
-                  return (
-                    <button
-                      className={styles.skillItem}
-                      key={skill.id}
-                      onClick={() => {
-                        setSelectedSkill(skill);
-                        setSelectedActivity(null);
-                      }}
-                      type="button"
-                    >
-                      <strong>{skill.name}</strong>
-                      {skillProgress.status === "loading" ? (
-                        <span>Loading progress...</span>
-                      ) : skillProgress.status === "unavailable" ? (
-                        <span>Progress unavailable</span>
-                      ) : (
-                        <>
-                          <span>Level {skillProgress.level}</span>
-                          <span>{skillProgress.xp} XP</span>
-                        </>
-                      )}
-                      {skillProgress.levelXp !== null && skillProgress.xpRequiredForNextLevel !== null ? (
-                        <span>
-                          {skillProgress.levelXp}/{skillProgress.xpRequiredForNextLevel} level XP
-                        </span>
-                      ) : null}
-                    </button>
-                  );
-                })()
-              ))}
+                return (
+                  <button
+                    className={styles.skillItem}
+                    key={training.id}
+                    onClick={() => {
+                      setSelectedSkill(skillCompat);
+                      setSelectedActivity(null);
+                    }}
+                    type="button"
+                  >
+                    <strong>{training.title}</strong>
+                    {skillProgress.status === "loading" ? (
+                      <span>Loading progress...</span>
+                    ) : skillProgress.status === "unavailable" ? (
+                      <span>Progress unavailable</span>
+                    ) : (
+                      <>
+                        <span>Level {skillProgress.level}</span>
+                        <span>{skillProgress.xp} XP</span>
+                      </>
+                    )}
+                    {skillProgress.levelXp !== null && skillProgress.xpRequiredForNextLevel !== null ? (
+                      <span>
+                        {skillProgress.levelXp}/{skillProgress.xpRequiredForNextLevel} level XP
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })}
             </div>
           </aside>
 
@@ -1741,49 +1789,73 @@ export function ThinkertoolsMissionsChat() {
                   <h2>{selectedSkill.name}</h2>
                 </div>
                 <div className={styles.activityList}>
-                  {selectedSkill.activities.map((activity) => {
-                    const activityStatus = getActivityStatusLabel(selectedSkill, activity);
-                    const activityUnlocked = activityStatus === "Unlocked";
-                    const unavailableMessage = getUnavailableActivityMessage(activity);
+                  {(() => {
+                    // Resolve groups for this training from DB data (Req 2.3, 6.4)
+                    const trainingSlug = resolvedTrainings.entries.find(
+                      (t) => t.id === selectedSkill.id,
+                    )?.slug;
+                    const dbGroups = trainingSlug ? groupsByTrainingSlug[trainingSlug] : undefined;
+                    const groupsLoading = trainingSlug ? groupsLoadingBySlug[trainingSlug] : false;
+                    const groupsError = trainingSlug ? groupsErrorBySlug[trainingSlug] : null;
 
-                    return (
-                      <div
-                        className={`${styles.activityItem} ${
-                          selectedActivity?.id === activity.id ? styles.selectedActivityItem : ""
-                        }`}
-                        key={activity.id}
-                      >
-                        <span>Level {activity.level}</span>
-                        <strong>{activity.name}</strong>
-                        <span>
-                          {activity.xp} XP / {activityStatus}
-                        </span>
-                        {activityUnlocked && !unavailableMessage ? (
-                          <button
-                            className={styles.panelActionButton}
-                            onClick={() => {
-                              void startActivity(selectedSkill, activity);
-                            }}
-                            type="button"
-                          >
-                            {trainingLoading && selectedActivity?.id === activity.id ? "Loading..." : "Start Activity"}
-                          </button>
-                        ) : (
-                          <div className={styles.lockedRequirements}>
-                            <span>{unavailableMessage ? "Availability" : "Requirements"}</span>
-                            <ul>
-                              {(unavailableMessage
-                                ? [unavailableMessage]
-                                : getActivityRequirements(selectedSkill, activity)
-                              ).map((requirement) => (
-                                <li key={requirement}>{requirement}</li>
-                              ))}
-                            </ul>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
+                    if (groupsLoading && !dbGroups) {
+                      return <p>Loading activity groups...</p>;
+                    }
+
+                    if (groupsError && !dbGroups) {
+                      return <p className={styles.trainingError}>{groupsError}</p>;
+                    }
+
+                    const groups = dbGroups ?? [];
+
+                    return groups.map((group) => {
+                      const activity: SkillActivity = {
+                        id: group.slug,
+                        level: 1,
+                        name: group.title,
+                        xp: 0,
+                        status: "Unlocked",
+                        requirements: [],
+                      };
+                      const activityStatus = getActivityStatusLabel(selectedSkill, activity);
+                      const activityUnlocked = activityStatus === "Unlocked";
+
+                      return (
+                        <div
+                          className={`${styles.activityItem} ${
+                            selectedActivity?.id === activity.id ? styles.selectedActivityItem : ""
+                          }`}
+                          key={activity.id}
+                        >
+                          {group.description && <span>{group.description}</span>}
+                          <strong>{group.title}</strong>
+                          <span>
+                            {activityStatus}
+                          </span>
+                          {activityUnlocked ? (
+                            <button
+                              className={styles.panelActionButton}
+                              onClick={() => {
+                                void startActivity(selectedSkill, activity);
+                              }}
+                              type="button"
+                            >
+                              {trainingLoading && selectedActivity?.id === activity.id ? "Loading..." : "Start Activity"}
+                            </button>
+                          ) : (
+                            <div className={styles.lockedRequirements}>
+                              <span>Requirements</span>
+                              <ul>
+                                {getActivityRequirements(selectedSkill, activity).map((requirement) => (
+                                  <li key={requirement}>{requirement}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    });
+                  })()}
                 </div>
               </>
             ) : (
@@ -2029,7 +2101,7 @@ export function ThinkertoolsMissionsChat() {
                   <section className={styles.trainingRound} aria-label="Training question">
                     <div className={styles.trainingRoundHeader}>
                       <span>{roundTranscript.round.difficultyLabel}</span>
-                      <strong>{CONTRADICTION_SPOTTING_DISPLAY_TITLE}</strong>
+                      <strong>{roundTranscript.round.title}</strong>
                       <span>{roundTranscript.round.xpReward} XP</span>
                     </div>
                     <p className={styles.trainingQuestion}>{roundTranscript.round.questionText}</p>
@@ -2127,21 +2199,41 @@ export function ThinkertoolsMissionsChat() {
             <div className={styles.panelHeading}>
               <h2>Missions</h2>
             </div>
-            <div className={styles.missionList}>
-              {missions.map((mission) => (
+            {missionsError ? (
+              <div className={styles.missionList}>
+                <p>{missionsError}</p>
                 <button
-                  className={`${styles.missionItem} ${
-                    selectedMission?.id === mission.id ? styles.selectedMissionItem : ""
-                  }`}
-                  key={mission.id}
-                  onClick={() => void selectMissionForChat(mission)}
+                  onClick={() => void loadMissions()}
                   type="button"
                 >
-                  <strong>{mission.title}</strong>
-                  <span className={styles.missionStatus}>{getMissionStatusLabel(mission)}</span>
+                  Retry
                 </button>
-              ))}
-            </div>
+              </div>
+            ) : missionsLoading && !missionsData ? (
+              <div className={styles.missionList}>
+                <p>Loading missions...</p>
+              </div>
+            ) : resolvedMissions.entries.length === 0 ? (
+              <div className={styles.missionList}>
+                <p>No missions available</p>
+              </div>
+            ) : (
+              <div className={styles.missionList}>
+                {missions.map((mission) => (
+                  <button
+                    className={`${styles.missionItem} ${
+                      selectedMission?.id === mission.id ? styles.selectedMissionItem : ""
+                    }`}
+                    key={mission.id}
+                    onClick={() => void selectMissionForChat(mission)}
+                    type="button"
+                  >
+                    <strong>{mission.title}</strong>
+                    <span className={styles.missionStatus}>{getMissionStatusLabel(mission)}</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </aside>
 
           <aside className={styles.missionDetailsPanel} aria-label="Mission details">

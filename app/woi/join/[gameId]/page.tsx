@@ -1,3 +1,5 @@
+import { Suspense } from "react";
+
 import { WoiJoinLinkScreen } from "@/components/woi/join-link-screen";
 
 type WoiJoinByLinkPageProps = {
@@ -6,5 +8,9 @@ type WoiJoinByLinkPageProps = {
 
 export default async function WoiJoinByLinkPage({ params }: WoiJoinByLinkPageProps) {
   const { gameId } = await params;
-  return <WoiJoinLinkScreen gameId={gameId} />;
+  return (
+    <Suspense fallback={null}>
+      <WoiJoinLinkScreen gameId={gameId} />
+    </Suspense>
+  );
 }
