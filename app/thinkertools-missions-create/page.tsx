@@ -68,18 +68,12 @@ function tokenizeIntent(value: string): string[] {
     .filter((word) => word.length > 0 && !INTENT_STOP_WORDS.has(word));
 }
 
-function toTitleCase(value: string): string {
-  return value
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-    .join(" ");
+function normalizeCategoryLabel(value: string): string {
+  return value.trim().replace(/\s+/g, " ");
 }
 
-function deriveCategoryTitle(intent: string): string {
-  const tokens = tokenizeIntent(intent).slice(0, 4);
-  if (tokens.length === 0) return "New Category";
-  return toTitleCase(tokens.join(" "));
+function categoryKey(value: string): string {
+  return normalizeCategoryLabel(value).toLowerCase();
 }
 
 function isIdeationPrompt(intent: string): boolean {
@@ -303,14 +297,16 @@ export default function MissionsCreatePage() {
   const activityFormatButtonRef = useRef<HTMLButtonElement>(null);
   const missionFormatButtonRef = useRef<HTMLButtonElement>(null);
 
-  async function loadGroupsForTraining(trainingId: string) {
+  async function loadGroupsForTraining(trainingId: string): Promise<ActivityGroup[]> {
     try {
       const result = await apiFetch<ListGroupsResponse>(
         `/api/thinkertools-missions-create/activity-groups?trainingId=${trainingId}`,
       );
       setGroups(result.groups);
+      return result.groups;
     } catch {
       setGroups([]);
+      return [];
     }
   }
 
@@ -555,9 +551,9 @@ export default function MissionsCreatePage() {
       return;
     }
 
-    // Activities: preload groups so we can infer or create a category from intent.
-    setStep("describe");
+    // Activities use the selected training subject as their category.
     await loadGroupsForTraining(selectedTraining!.id);
+    setStep("describe");
 
     setMessages((prev) => [...prev, {
       id: nextId(), role: "assistant",
@@ -565,22 +561,13 @@ export default function MissionsCreatePage() {
     }]);
   }
 
-  async function resolveActivityGroup(intent: string, training: Training): Promise<ActivityGroup | null> {
-
-    const intentTokens = tokenizeIntent(intent);
-    if (intentTokens.length > 0 && groups.length > 0) {
-      let bestGroup: ActivityGroup | null = null;
-      let bestScore = 0;
-      for (const group of groups) {
-        const groupTokens = new Set(tokenizeIntent(`${group.title} ${group.description}`));
-        const score = intentTokens.reduce((count, token) => count + (groupTokens.has(token) ? 1 : 0), 0);
-        if (score > bestScore) {
-          bestScore = score;
-          bestGroup = group;
-        }
-      }
-      if (bestGroup && bestScore >= 2) return bestGroup;
-    }
+  async function resolveTrainingActivityGroup(
+    training: Training,
+    availableGroups = groups,
+  ): Promise<ActivityGroup> {
+    const title = normalizeCategoryLabel(training.title);
+    const existingGroup = availableGroups.find((group) => categoryKey(group.title) === categoryKey(title));
+    if (existingGroup) return existingGroup;
 
     const result = await apiFetch<CreateGroupResponse>(
       "/api/thinkertools-missions-create/activity-groups",
@@ -588,11 +575,14 @@ export default function MissionsCreatePage() {
         method: "POST",
         body: JSON.stringify({
           trainingId: training.id,
-          title: deriveCategoryTitle(intent),
+          title,
         }),
       },
     );
-    setGroups((prev) => [...prev, result.group]);
+    setGroups((prev) => {
+      if (prev.some((group) => group.id === result.group.id)) return prev;
+      return [...prev, result.group];
+    });
     return result.group;
   }
 
@@ -609,6 +599,7 @@ export default function MissionsCreatePage() {
     try {
       let generationDescription = text;
       let activeTraining = selectedTraining;
+      let activeGroups = groups;
       let shouldCheckShift = selectedContentType === "activity" && activityPhase.kind === "idle";
 
       if (pendingTrainingSwitch) {
@@ -619,10 +610,15 @@ export default function MissionsCreatePage() {
             setSelectedTraining(targetTraining);
             setSelectedGroup(null);
             setActivityPhase({ kind: "idle" });
-            await loadGroupsForTraining(targetTraining.id);
+            const loadedGroups = await loadGroupsForTraining(targetTraining.id);
+            activeGroups = loadedGroups;
             setMessages((prev) => [
               ...prev,
-              { id: nextId(), role: "assistant", text: `Switched to "${targetTraining.title}". Continuing with your topic.` },
+              {
+                id: nextId(),
+                role: "assistant",
+                text: `Switched to "${targetTraining.title}". Continuing with your topic.`,
+              },
             ]);
           }
           generationDescription = pendingTrainingSwitch.queuedIntent;
@@ -651,7 +647,7 @@ export default function MissionsCreatePage() {
       if (selectedContentType === "activity") {
         if (activityPhase.kind === "await_readiness") {
           if (needsIdeasResponse(activityText)) {
-            const options = await loadIdeaDirections(activityPhase.topic, selectedTraining);
+            const options = await loadIdeaDirections(activityPhase.topic, activeTraining);
             setActivityPhase({ kind: "ideation", topic: activityPhase.topic, options });
             setMessages((prev) => [
               ...prev,
@@ -710,7 +706,7 @@ export default function MissionsCreatePage() {
             if (interpretation.intent === "revise_directions") {
               const options = await loadIdeaDirections(
                 activityPhase.topic,
-                selectedTraining,
+                activeTraining,
                 interpretation.refinement || activityText,
               );
               setActivityPhase({ kind: "ideation", topic: activityPhase.topic, options });
@@ -770,8 +766,8 @@ export default function MissionsCreatePage() {
           }
 
           if (needsIdeasResponse(activityText) || isIdeationPrompt(activityText)) {
-            const topic = selectedTraining.title;
-            const options = await loadIdeaDirections(topic, selectedTraining);
+            const topic = activeTraining.title;
+            const options = await loadIdeaDirections(topic, activeTraining);
             setActivityPhase({ kind: "ideation", topic, options });
             setMessages((prev) => [
               ...prev,
@@ -819,17 +815,10 @@ export default function MissionsCreatePage() {
         }
       }
 
-      let activityGroupId = selectedGroup?.id ?? null;
-      let activityDraftTitle = selectedGroup?.title;
-      if (selectedContentType === "activity" && !activityGroupId) {
-        const resolvedGroup = await resolveActivityGroup(generationDescription, activeTraining);
-        if (!resolvedGroup) {
-          throw new Error("Failed to resolve a category for this activity.");
-        }
-
-        setSelectedGroup(resolvedGroup);
-        activityGroupId = resolvedGroup.id;
-        activityDraftTitle = resolvedGroup.title;
+      let resolvedActivityGroup = selectedGroup?.training_id === activeTraining.id ? selectedGroup : null;
+      if (selectedContentType === "activity" && !resolvedActivityGroup) {
+        resolvedActivityGroup = await resolveTrainingActivityGroup(activeTraining, activeGroups);
+        setSelectedGroup(resolvedActivityGroup);
       }
 
       const created = await apiFetch<CreateDraftResponse>(
@@ -839,8 +828,8 @@ export default function MissionsCreatePage() {
           body: JSON.stringify({
             contentType: selectedContentType,
             primaryTrainingId: activeTraining.id,
-            activityGroupId,
-            title: selectedContentType === "activity" ? activityDraftTitle : undefined,
+            activityGroupId: resolvedActivityGroup?.id ?? null,
+            title: selectedContentType === "activity" ? activeTraining.title : undefined,
           }),
         },
       );
@@ -866,6 +855,10 @@ export default function MissionsCreatePage() {
     if (!selectedTraining) return;
     setFormCreating(true); setFormError(null);
     try {
+      const activityGroup = formContentType === "activity"
+        ? await resolveTrainingActivityGroup(selectedTraining)
+        : null;
+
       const result = await apiFetch<CreateDraftResponse>(
         "/api/thinkertools-missions-create/drafts",
         {
@@ -873,6 +866,7 @@ export default function MissionsCreatePage() {
           body: JSON.stringify({
             contentType: formContentType,
             primaryTrainingId: selectedTraining.id,
+            activityGroupId: activityGroup?.id ?? null,
             title: formTitle.trim() || undefined,
           }),
         },
@@ -1102,7 +1096,7 @@ export default function MissionsCreatePage() {
               <div ref={chatBottomRef} />
             </div>
 
-            {/* Chat input — only on describe step */}
+            {/* Chat input */}
             {step === "describe" ? (
               <>
                 <form ref={chatFormRef} onSubmit={handleChatSubmit} className="border-t border-slate-100 px-4 py-3 flex gap-2">
