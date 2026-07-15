@@ -5,6 +5,7 @@ import { z } from "zod";
 import { parseBody, unexpectedError } from "@/lib/api/route-utils";
 import { requireActorIdFromRequest } from "@/lib/auth/actor";
 import { jsonSuccess } from "@/lib/http";
+import { extractQuestionText, type TrainingActivityRoundContent } from "@/lib/quests";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 
 type ActivityGroupRow = {
@@ -17,8 +18,31 @@ type ActivityGroupRow = {
   display_order: number;
 };
 
+type DraftStatus = "draft" | "valid" | "published" | "archived";
+type GroupDraftRow = {
+  id: string;
+  title: string;
+  body: unknown;
+  activity_group_id: string | null;
+  status: DraftStatus;
+};
+type ActivityQuestionRow = {
+  id: string;
+  title: string;
+  activity_group_id: string | null;
+  difficulty_label: string;
+  publication_status: "pending" | "live";
+  round_content: TrainingActivityRoundContent;
+};
+
 function normalizeTitle(value: string): string {
   return value.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function extractDraftQuestionText(body: unknown): string {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return "";
+  const questionText = (body as Record<string, unknown>).question_text;
+  return typeof questionText === "string" ? questionText.trim() : "";
 }
 
 const GROUP_SELECT = "id, slug, title, description, training_id, template_family, display_order";
@@ -45,10 +69,138 @@ export async function GET(request: Request) {
       query.eq("training_id", trainingId);
     }
 
-    const { data, error } = await query;
+    const { data, error } = await query.returns<ActivityGroupRow[]>();
     if (error) throw new Error(error.message);
 
-    return jsonSuccess({ groups: data ?? [] });
+    const groups = data ?? [];
+    const groupIds = groups.map((group) => group.id);
+
+    const [questionsResult, draftsResult, uncategorizedQuestionsResult, uncategorizedDraftsResult] = await Promise.all([
+      groupIds.length > 0
+        ? supabaseAdmin
+            .from("training_activities")
+            .select("id, title, activity_group_id, difficulty_label, publication_status, round_content")
+            .in("activity_group_id", groupIds)
+            .neq("publication_status", "archived")
+            .order("title", { ascending: true })
+            .returns<ActivityQuestionRow[]>()
+        : Promise.resolve({ data: [], error: null }),
+      groupIds.length > 0
+        ? supabaseAdmin
+            .from("content_drafts")
+            .select("id, title, body, activity_group_id, status")
+            .eq("created_by", actor.actorId)
+            .eq("content_type", "activity")
+            .in("activity_group_id", groupIds)
+            .neq("status", "archived")
+            .order("updated_at", { ascending: false })
+            .returns<GroupDraftRow[]>()
+        : Promise.resolve({ data: [], error: null }),
+      trainingId
+        ? supabaseAdmin
+            .from("training_activities")
+            .select("id, title, activity_group_id, difficulty_label, publication_status, round_content")
+            .eq("primary_training_id", trainingId)
+            .is("activity_group_id", null)
+            .neq("publication_status", "archived")
+            .order("title", { ascending: true })
+            .returns<ActivityQuestionRow[]>()
+        : Promise.resolve({ data: [], error: null }),
+      trainingId
+        ? supabaseAdmin
+            .from("content_drafts")
+            .select("id, title, body, activity_group_id, status")
+            .eq("created_by", actor.actorId)
+            .eq("content_type", "activity")
+            .eq("primary_training_id", trainingId)
+            .is("activity_group_id", null)
+            .neq("status", "archived")
+            .order("updated_at", { ascending: false })
+            .returns<GroupDraftRow[]>()
+        : Promise.resolve({ data: [], error: null }),
+    ]);
+
+    if (questionsResult.error) throw new Error(questionsResult.error.message);
+    if (draftsResult.error) throw new Error(draftsResult.error.message);
+    if (uncategorizedQuestionsResult.error) {
+      throw new Error(uncategorizedQuestionsResult.error.message);
+    }
+    if (uncategorizedDraftsResult.error) {
+      throw new Error(uncategorizedDraftsResult.error.message);
+    }
+
+    const questionCountByGroup = new Map<string, number>();
+    const questionsByGroup = new Map<string, Array<{
+      id: string;
+      title: string;
+      questionText: string;
+      difficultyLabel: string;
+      publicationStatus: "pending" | "live";
+    }>>();
+    for (const question of questionsResult.data ?? []) {
+      if (!question.activity_group_id) continue;
+      questionCountByGroup.set(
+        question.activity_group_id,
+        (questionCountByGroup.get(question.activity_group_id) ?? 0) + 1,
+      );
+      const questions = questionsByGroup.get(question.activity_group_id) ?? [];
+      questions.push({
+        id: question.id,
+        title: question.title,
+        questionText: extractQuestionText(question.round_content),
+        difficultyLabel: question.difficulty_label,
+        publicationStatus: question.publication_status,
+      });
+      questionsByGroup.set(question.activity_group_id, questions);
+    }
+
+    const draftStatusCountsByGroup = new Map<string, Partial<Record<DraftStatus, number>>>();
+    const draftsByGroup = new Map<string, Array<{
+      id: string;
+      title: string;
+      questionText: string;
+      status: DraftStatus;
+    }>>();
+    for (const draft of draftsResult.data ?? []) {
+      if (!draft.activity_group_id) continue;
+      const counts = draftStatusCountsByGroup.get(draft.activity_group_id) ?? {};
+      counts[draft.status] = (counts[draft.status] ?? 0) + 1;
+      draftStatusCountsByGroup.set(draft.activity_group_id, counts);
+
+      const drafts = draftsByGroup.get(draft.activity_group_id) ?? [];
+      drafts.push({
+        id: draft.id,
+        title: draft.title,
+        questionText: extractDraftQuestionText(draft.body),
+        status: draft.status,
+      });
+      draftsByGroup.set(draft.activity_group_id, drafts);
+    }
+
+    return jsonSuccess({
+      groups: groups.map((group) => ({
+        ...group,
+        questionCount: questionCountByGroup.get(group.id) ?? 0,
+        questions: questionsByGroup.get(group.id) ?? [],
+        draftStatusCounts: draftStatusCountsByGroup.get(group.id) ?? {},
+        drafts: draftsByGroup.get(group.id) ?? [],
+      })),
+      uncategorized: {
+        questions: (uncategorizedQuestionsResult.data ?? []).map((question) => ({
+          id: question.id,
+          title: question.title,
+          questionText: extractQuestionText(question.round_content),
+          difficultyLabel: question.difficulty_label,
+          publicationStatus: question.publication_status,
+        })),
+        drafts: (uncategorizedDraftsResult.data ?? []).map((draft) => ({
+          id: draft.id,
+          title: draft.title,
+          questionText: extractDraftQuestionText(draft.body),
+          status: draft.status,
+        })),
+      },
+    });
   } catch (error) {
     return unexpectedError("Failed to list activity groups", error);
   }

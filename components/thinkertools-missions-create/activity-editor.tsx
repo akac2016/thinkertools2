@@ -1,11 +1,12 @@
 "use client";
 
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { FormEvent, type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from "react";
 
 import { apiFetch, isApiRequestError } from "@/components/quipx/client";
+import { deriveActivityAuthoringState } from "@/lib/authoring/activity-authoring-state";
 import type { ContentDraft, ValidationIssue } from "@/lib/authoring/draft-types";
-
-import { DraftSourceBadge } from "./draft-source-badge";
+import { extractPastedQuestionBatch } from "@/lib/authoring/question-batch";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -21,7 +22,18 @@ type ActivityBody = {
 type Props = {
   draft: ContentDraft;
   onDraftChange: (updated: ContentDraft) => void;
+  isTransient?: boolean;
+  onDraftCreated?: (created: ContentDraft) => void;
   fromMessage?: string;
+  activityGroups?: ActivityGroupOption[];
+  loadingActivityGroups?: boolean;
+  activityGroupsError?: string | null;
+  onActivityGroupCreated?: (group: ActivityGroupOption) => void;
+};
+
+export type ActivityGroupOption = {
+  id: string;
+  title: string;
 };
 
 type ChatMessage = {
@@ -83,6 +95,16 @@ function isAdditiveQuestionRequest(input: string): boolean {
   return /\b\d+\s+more\b/.test(normalized);
 }
 
+function isYesResponse(input: string): boolean {
+  return /^(?:yes|y|yeah|yep|same group|they do|all together)[.!]?$/i.test(input.trim());
+}
+
+function isNoResponse(input: string): boolean {
+  return /^(?:no|n|nope|different groups|separate them|they do not|they don't)[.!]?$/i.test(
+    input.trim(),
+  );
+}
+
 function requestedAdditionalQuestionCount(input: string): number {
   const normalized = input.toLowerCase();
   const explicit = normalized.match(/\b(\d+)\s+(?:more|new|additional)?\s*questions?\b/);
@@ -124,10 +146,30 @@ const STATUS_STYLES: Record<ContentDraft["status"], string> = {
 };
 const STATUS_LABELS: Record<ContentDraft["status"], string> = {
   draft: "Draft",
-  valid: "Valid",
+  valid: "Ready to publish",
   published: "Published",
   archived: "Archived",
 };
+const STATUS_DESCRIPTIONS: Record<ContentDraft["status"], string> = {
+  draft: "Still being edited or missing information needed to publish.",
+  valid: "Complete and ready to publish. Players cannot see it until it goes live.",
+  published: "A pending or live activity has been created from this draft.",
+  archived: "Retired and no longer active.",
+};
+
+function BadgeTooltip({ children, description }: { children: ReactNode; description: string }) {
+  return (
+    <span className="group relative inline-flex">
+      {children}
+      <span
+        role="tooltip"
+        className="pointer-events-none absolute left-0 top-full z-20 mt-2 w-64 rounded-lg bg-slate-900 px-3 py-2 text-left text-xs leading-5 text-white opacity-0 shadow-lg transition-opacity duration-100 group-hover:opacity-100 group-focus-within:opacity-100"
+      >
+        {description}
+      </span>
+    </span>
+  );
+}
 
 let msgCounter = 0;
 function nextId() {
@@ -151,12 +193,31 @@ function upsertQuestionDraft(drafts: ContentDraft[], draft: ContentDraft): Conte
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
+export function ActivityEditor({
+  draft,
+  onDraftChange,
+  isTransient = false,
+  onDraftCreated,
+  fromMessage,
+  activityGroups = [],
+  loadingActivityGroups = false,
+  activityGroupsError = null,
+  onActivityGroupCreated,
+}: Props) {
+  const router = useRouter();
+
   // ── Shared draft body (kept in sync between both planes) ────────────────
   const [currentDraft, setCurrentDraft] = useState(draft);
   const [questionDrafts, setQuestionDrafts] = useState<ContentDraft[]>([draft]);
   const body = toActivityBody(currentDraft.body);
   const draftId = currentDraft.id;
+  const authoringState = deriveActivityAuthoringState({
+    subjectTrainingId: currentDraft.primaryTrainingId,
+    selectedContentType: currentDraft.contentType,
+    hasDraft: true,
+    activityGroupId: currentDraft.activityGroupId,
+    draftStatus: currentDraft.status,
+  });
 
   // ── Chat state ──────────────────────────────────────────────────────────
   const initialBody = toActivityBody(draft.body);
@@ -172,13 +233,19 @@ export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
       role: "assistant",
       text: hasExistingContent
         ? "I've put together a practice question based on your description. You can see it in the preview card below. Keep chatting to refine it, or edit any field directly in the manual form."
-        : "Describe what you want learners to practice — a topic, a concept, a scenario. I'll put together a practice question for you.",
+        : draft.activityGroupTitle
+          ? `You're adding a new question to “${draft.activityGroupTitle}.” Describe what you want learners to practice, and I'll help you draft it.`
+          : "Describe what you want learners to practice — a topic, a concept, a scenario. I'll put together a practice question for you.",
     });
     return msgs;
   });
   const [chatInput, setChatInput] = useState("");
   const [chatBusy, setChatBusy] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
+  const [pendingQuestionBatch, setPendingQuestionBatch] = useState<{
+    questions: string[];
+    confirmed: boolean;
+  } | null>(null);
   const [lastGenerationContext, setLastGenerationContext] = useState<ActivityBody>(initialBody);
   const chatBottomRef = useRef<HTMLDivElement>(null);
 
@@ -196,10 +263,20 @@ export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [hasRequestedValidation, setHasRequestedValidation] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  // ── Activity group assignment state ─────────────────────────────────────
+  const [selectedActivityGroupId, setSelectedActivityGroupId] = useState("");
+  const [newActivityGroupTitle, setNewActivityGroupTitle] = useState("");
+  const [assigningActivityGroup, setAssigningActivityGroup] = useState(false);
+  const [activityGroupAssignmentError, setActivityGroupAssignmentError] = useState<string | null>(null);
 
   // ── Publish state ────────────────────────────────────────────────────────
   const [publishing, setPublishing] = useState(false);
   const [publishError, setPublishError] = useState<string | null>(null);
+  const [publishMenuOpen, setPublishMenuOpen] = useState(false);
   const [publishedSlug, setPublishedSlug] = useState<string | null>(
     draft.status === "published" && draft.slug ? draft.slug : null,
   );
@@ -207,7 +284,7 @@ export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
   // ── Release (Go Live) state ──────────────────────────────────────────────
   const [releasing, setReleasing] = useState(false);
   const [releaseError, setReleaseError] = useState<string | null>(null);
-  const [isLive, setIsLive] = useState(false);
+  const [isLive, setIsLive] = useState(draft.publishedActivityStatus === "live");
 
   // ── Scroll chat to bottom on new messages ───────────────────────────────
   useEffect(() => {
@@ -218,6 +295,11 @@ export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
     let mounted = true;
 
     async function loadQuestionDrafts() {
+      if (isTransient) {
+        setQuestionDrafts([draft]);
+        return;
+      }
+
       if (!draft.activityGroupId) {
         setQuestionDrafts((prev) => upsertQuestionDraft(prev, draft));
         return;
@@ -244,14 +326,19 @@ export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
     return () => {
       mounted = false;
     };
-  }, [draft]);
+  }, [draft, isTransient]);
 
   // ── Sync form fields whenever the draft body changes ────────────────────
   function syncFormFromDraft(updated: ContentDraft) {
     const mergedDraft: ContentDraft = {
       ...updated,
       trainingTitle: updated.trainingTitle ?? currentDraft.trainingTitle ?? null,
-      activityGroupTitle: updated.activityGroupTitle ?? currentDraft.activityGroupTitle ?? null,
+      activityGroupTitle: Object.prototype.hasOwnProperty.call(updated, "activityGroupTitle")
+        ? updated.activityGroupTitle ?? null
+        : currentDraft.activityGroupTitle ?? null,
+      publishedActivityStatus: Object.prototype.hasOwnProperty.call(updated, "publishedActivityStatus")
+        ? updated.publishedActivityStatus ?? null
+        : currentDraft.publishedActivityStatus ?? null,
     };
     const b = toActivityBody(updated.body);
     setCurrentDraft(mergedDraft);
@@ -263,7 +350,7 @@ export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
     setExpectedAnswerCount(b.expected_answer_count);
     setLastGenerationContext(b);
     setPublishedSlug(mergedDraft.status === "published" && mergedDraft.slug ? mergedDraft.slug : null);
-    setIsLive(false);
+    setIsLive(mergedDraft.publishedActivityStatus === "live");
     setQuestionDrafts((prev) => upsertQuestionDraft(prev, mergedDraft));
     onDraftChange(mergedDraft);
   }
@@ -273,7 +360,149 @@ export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
     setSaveSuccess(false);
     setPublishError(null);
     setReleaseError(null);
+    setHasRequestedValidation(false);
     syncFormFromDraft(nextDraft);
+  }
+
+  async function assignActivityGroup(activityGroupId: string | null) {
+    const result = await apiFetch<{ draft: ContentDraft }>(
+      `/api/thinkertools-missions-create/drafts/${draftId}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ activityGroupId }),
+      },
+    );
+    syncFormFromDraft(result.draft);
+    setSelectedActivityGroupId("");
+    setNewActivityGroupTitle("");
+  }
+
+  async function handleRemoveActivityGroup() {
+    if (!currentDraft.activityGroupId || assigningActivityGroup || isLive) return;
+
+    setAssigningActivityGroup(true);
+    setActivityGroupAssignmentError(null);
+    try {
+      await assignActivityGroup(null);
+    } catch (err) {
+      setActivityGroupAssignmentError(
+        isApiRequestError(err) ? err.message : "Failed to remove activity group.",
+      );
+    } finally {
+      setAssigningActivityGroup(false);
+    }
+  }
+
+  async function handleExistingActivityGroupAssignment() {
+    if (!selectedActivityGroupId || assigningActivityGroup) return;
+
+    setAssigningActivityGroup(true);
+    setActivityGroupAssignmentError(null);
+    try {
+      await assignActivityGroup(selectedActivityGroupId);
+    } catch (err) {
+      setActivityGroupAssignmentError(
+        isApiRequestError(err) ? err.message : "Failed to assign activity group.",
+      );
+    } finally {
+      setAssigningActivityGroup(false);
+    }
+  }
+
+  async function handleCreateAndAssignActivityGroup() {
+    const groupTitle = newActivityGroupTitle.trim();
+    if (!groupTitle || assigningActivityGroup) return;
+
+    setAssigningActivityGroup(true);
+    setActivityGroupAssignmentError(null);
+    try {
+      const result = await apiFetch<{ group: ActivityGroupOption }>(
+        "/api/thinkertools-missions-create/activity-groups",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            trainingId: currentDraft.primaryTrainingId,
+            title: groupTitle,
+          }),
+        },
+      );
+      onActivityGroupCreated?.(result.group);
+      await assignActivityGroup(result.group.id);
+    } catch (err) {
+      setActivityGroupAssignmentError(
+        isApiRequestError(err) ? err.message : "Failed to create and assign activity group.",
+      );
+    } finally {
+      setAssigningActivityGroup(false);
+    }
+  }
+
+  async function createPastedQuestionBatch() {
+    if (
+      !pendingQuestionBatch?.confirmed
+      || !currentDraft.activityGroupId
+      || chatBusy
+    ) {
+      return;
+    }
+
+    setChatBusy(true);
+    setChatError(null);
+    try {
+      const generatedDrafts: ContentDraft[] = [];
+      for (const question of pendingQuestionBatch.questions) {
+        const created = await apiFetch<{ draft: ContentDraft }>(
+          "/api/thinkertools-missions-create/drafts",
+          {
+            method: "POST",
+            body: JSON.stringify({
+              contentType: "activity",
+              primaryTrainingId: currentDraft.primaryTrainingId,
+              activityGroupId: currentDraft.activityGroupId,
+              title: currentDraft.title || undefined,
+            }),
+          },
+        );
+        const generated = await apiFetch<{ draft: ContentDraft }>(
+          `/api/thinkertools-missions-create/drafts/${created.draft.id}/generate`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              description: `Build one activity from this teacher-provided question while preserving its intent: ${question}`,
+            }),
+          },
+        );
+        generatedDrafts.push(generated.draft);
+      }
+
+      setQuestionDrafts((prev) => {
+        let next = prev;
+        for (const generated of generatedDrafts) {
+          next = upsertQuestionDraft(next, generated);
+        }
+        return next;
+      });
+      const firstDraft = generatedDrafts[0];
+      if (firstDraft) {
+        syncFormFromDraft(firstDraft);
+        if (isTransient) onDraftCreated?.(firstDraft);
+      }
+      setPendingQuestionBatch(null);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: nextId(),
+          role: "assistant",
+          text: `Created ${generatedDrafts.length} separate questions in “${currentDraft.activityGroupTitle ?? "the confirmed activity group"}.”`,
+        },
+      ]);
+    } catch (error) {
+      setChatError(
+        isApiRequestError(error) ? error.message : "Failed to create the question batch.",
+      );
+    } finally {
+      setChatBusy(false);
+    }
   }
 
   // ── Chat submit ──────────────────────────────────────────────────────────
@@ -287,12 +516,102 @@ export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
     setMessages((prev) => [...prev, { id: nextId(), role: "user", text }]);
     setChatBusy(true);
 
+    if (pendingQuestionBatch && !pendingQuestionBatch.confirmed) {
+      if (isYesResponse(text)) {
+        setPendingQuestionBatch({ ...pendingQuestionBatch, confirmed: true });
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: nextId(),
+            role: "assistant",
+            text: currentDraft.activityGroupId
+              ? "Confirmed. Review the activity group below, then create the batch."
+              : "Confirmed. Assign or create one activity group for this draft, then create the batch.",
+          },
+        ]);
+      } else if (isNoResponse(text)) {
+        setPendingQuestionBatch(null);
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: nextId(),
+            role: "assistant",
+            text: "Nothing was saved. Split the questions into intentional sets and add each set to its chosen activity group.",
+          },
+        ]);
+      } else {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: nextId(),
+            role: "assistant",
+            text: "Please reply yes if every pasted question belongs in this activity group, or no if they should be separated.",
+          },
+        ]);
+      }
+      setChatBusy(false);
+      return;
+    }
+
     const hasDraftContent = hasActivityBodyContent(body);
+    const isAdditionalQuestionRequest = hasDraftContent && isAdditiveQuestionRequest(text);
+    const pastedQuestions = extractPastedQuestionBatch(text);
+
+    if (pastedQuestions) {
+      if (pastedQuestions.length > 10) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: nextId(),
+            role: "assistant",
+            text: `I found ${pastedQuestions.length} questions. Split this into batches of 10 or fewer so each set can be reviewed and assigned intentionally. Nothing was saved.`,
+          },
+        ]);
+      } else {
+        setPendingQuestionBatch({ questions: pastedQuestions, confirmed: false });
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: nextId(),
+            role: "assistant",
+            text: `I found ${pastedQuestions.length} separate questions. Do they all belong in the same activity group? Reply yes or no. Nothing will be saved until you confirm.`,
+          },
+        ]);
+      }
+      setChatBusy(false);
+      return;
+    }
+
+    if (isTransient && isAdditionalQuestionRequest) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: nextId(),
+          role: "assistant",
+          text: "Save this question first. Then you can add more questions to this activity group.",
+        },
+      ]);
+      setChatBusy(false);
+      return;
+    }
+
+    if (isAdditionalQuestionRequest && !authoringState.readyForMultiQuestionGeneration) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: nextId(),
+          role: "assistant",
+          text: "This draft needs an activity group before I can add more questions. Choose or create a group first.",
+        },
+      ]);
+      setChatBusy(false);
+      return;
+    }
 
     try {
       let result: { draft: ContentDraft } | null = null;
 
-      if (hasDraftContent && isAdditiveQuestionRequest(text)) {
+      if (isAdditionalQuestionRequest) {
         const iterations = requestedAdditionalQuestionCount(text);
         const seedBase = hasActivityBodyContent(lastGenerationContext) ? lastGenerationContext : body;
 
@@ -342,10 +661,32 @@ export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
         ]);
       } else if (!hasDraftContent) {
         // First message — generate from scratch
-        result = await apiFetch<{ draft: ContentDraft }>(
-          `/api/thinkertools-missions-create/drafts/${draftId}/generate`,
-          { method: "POST", body: JSON.stringify({ description: text }) },
-        );
+        if (isTransient) {
+          const preview = await apiFetch<{
+            body: ActivityBody;
+            aiSource: ContentDraft["aiSource"];
+            aiModel: string | null;
+          }>("/api/thinkertools-missions-create/activity-preview", {
+            method: "POST",
+            body: JSON.stringify({ action: "generate", description: text }),
+          });
+          result = {
+            draft: {
+              ...currentDraft,
+              body: preview.body,
+              status: "valid",
+              origin: "ai",
+              validationIssues: [],
+              aiSource: preview.aiSource,
+              aiModel: preview.aiModel,
+            },
+          };
+        } else {
+          result = await apiFetch<{ draft: ContentDraft }>(
+            `/api/thinkertools-missions-create/drafts/${draftId}/generate`,
+            { method: "POST", body: JSON.stringify({ description: text }) },
+          );
+        }
         const b2 = toActivityBody(result.draft.body);
         const summary = summariseDraft(b2);
         setMessages((prev) => [
@@ -358,10 +699,36 @@ export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
         ]);
       } else {
         // Subsequent messages — refine
-        result = await apiFetch<{ draft: ContentDraft }>(
-          `/api/thinkertools-missions-create/drafts/${draftId}/refine`,
-          { method: "POST", body: JSON.stringify({ instruction: text }) },
-        );
+        if (isTransient) {
+          const preview = await apiFetch<{
+            body: ActivityBody;
+            aiSource: ContentDraft["aiSource"];
+            aiModel: string | null;
+          }>("/api/thinkertools-missions-create/activity-preview", {
+            method: "POST",
+            body: JSON.stringify({
+              action: "refine",
+              currentBody: body,
+              instruction: text,
+            }),
+          });
+          result = {
+            draft: {
+              ...currentDraft,
+              body: preview.body,
+              status: "valid",
+              origin: currentDraft.origin === "manual" ? "co_authored" : currentDraft.origin,
+              validationIssues: [],
+              aiSource: preview.aiSource,
+              aiModel: preview.aiModel,
+            },
+          };
+        } else {
+          result = await apiFetch<{ draft: ContentDraft }>(
+            `/api/thinkertools-missions-create/drafts/${draftId}/refine`,
+            { method: "POST", body: JSON.stringify({ instruction: text }) },
+          );
+        }
         const b2 = toActivityBody(result.draft.body);
         const summary = summariseDraft(b2);
         setMessages((prev) => [
@@ -389,12 +756,22 @@ export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
     }
   }
 
+  function handleChatKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) {
+      return;
+    }
+
+    event.preventDefault();
+    event.currentTarget.form?.requestSubmit();
+  }
+
   // ── Form save ────────────────────────────────────────────────────────────
   async function handleSave(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setSaving(true);
     setSaveError(null);
     setSaveSuccess(false);
+    setHasRequestedValidation(true);
 
     const promptClaims = promptClaimsRaw
       .split("\n")
@@ -406,24 +783,40 @@ export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
       .filter(Boolean);
 
     try {
-      const result = await apiFetch<{ draft: ContentDraft }>(
-        `/api/thinkertools-missions-create/drafts/${draftId}`,
-        {
-          method: "PATCH",
-          body: JSON.stringify({
-            title: title.trim() || undefined,
-            body: {
-              round_type: "activity_standard",
-              question_text: questionText,
-              prompt_claims: promptClaims,
-              correct_answer_labels: correctLabels,
-              explanation,
-              expected_answer_count: expectedAnswerCount,
+      const draftBody = {
+        round_type: "activity_standard",
+        question_text: questionText,
+        prompt_claims: promptClaims,
+        correct_answer_labels: correctLabels,
+        explanation,
+        expected_answer_count: expectedAnswerCount,
+      };
+      const result = isTransient
+        ? await apiFetch<{ draft: ContentDraft }>(
+            "/api/thinkertools-missions-create/drafts",
+            {
+              method: "POST",
+              body: JSON.stringify({
+                contentType: "activity",
+                primaryTrainingId: currentDraft.primaryTrainingId,
+                activityGroupId: currentDraft.activityGroupId,
+                title: title.trim() || undefined,
+                body: draftBody,
+              }),
             },
-          }),
-        },
-      );
+          )
+        : await apiFetch<{ draft: ContentDraft }>(
+            `/api/thinkertools-missions-create/drafts/${draftId}`,
+            {
+              method: "PATCH",
+              body: JSON.stringify({
+                title: title.trim() || undefined,
+                body: draftBody,
+              }),
+            },
+          );
       syncFormFromDraft(result.draft);
+      if (isTransient) onDraftCreated?.(result.draft);
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 2500);
     } catch (err) {
@@ -434,9 +827,11 @@ export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
   }
 
   // ── Publish ──────────────────────────────────────────────────────────────
-  async function handlePublish() {
+  async function handlePublish(goLive = false) {
     setPublishing(true);
     setPublishError(null);
+    setPublishMenuOpen(false);
+    setHasRequestedValidation(true);
     try {
       const result = await apiFetch<{
         draft: ContentDraft;
@@ -446,10 +841,42 @@ export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
       });
       setPublishedSlug(result.publishedActivity.slug);
       syncFormFromDraft(result.draft);
+
+      if (goLive) {
+        setReleasing(true);
+        setReleaseError(null);
+        try {
+          await apiFetch(
+            `/api/thinkertools-missions-create/drafts/${draftId}/release`,
+            { method: "POST" },
+          );
+          setIsLive(true);
+        } catch (err) {
+          setReleaseError(isApiRequestError(err) ? err.message : "Published, but failed to go live.");
+        } finally {
+          setReleasing(false);
+        }
+      }
     } catch (err) {
       setPublishError(isApiRequestError(err) ? err.message : "Publish failed.");
     } finally {
       setPublishing(false);
+    }
+  }
+
+  async function handleDeleteDraft() {
+    if (deleting || isTransient) return;
+
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await apiFetch(`/api/thinkertools-missions-create/drafts/${draftId}`, {
+        method: "DELETE",
+      });
+      router.push("/thinkertools-missions-create");
+    } catch (error) {
+      setDeleteError(isApiRequestError(error) ? error.message : "Failed to delete draft.");
+      setDeleting(false);
     }
   }
 
@@ -475,6 +902,15 @@ export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
     : [];
 
   const hasDraftContent = hasActivityBodyContent(body);
+  const visibleValidationIssues = hasDraftContent || hasRequestedValidation
+    ? validationIssues
+    : [];
+  const needsActivityGroup = authoringState.needsActivityGroup;
+  const questionIsLive = isLive || currentDraft.publishedActivityStatus === "live";
+  const canRemoveActivityGroup = Boolean(
+    currentDraft.activityGroupId && !isTransient && !questionIsLive,
+  );
+  const trainingSubject = currentDraft.trainingTitle?.trim() || currentDraft.title.trim();
   const activeQuestionIndex = Math.max(
     0,
     questionDrafts.findIndex((item) => item.id === currentDraft.id),
@@ -486,54 +922,67 @@ export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
     <div className="flex flex-col gap-0 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
 
       {/* ── Top bar ──────────────────────────────────────────────────────── */}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
-        {/* Left: status + source */}
+      <div className="border-b border-slate-100 px-4 py-3">
         <div className="flex items-center gap-2">
-          <span
-            className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${STATUS_STYLES[currentDraft.status]}`}
-          >
-            {STATUS_LABELS[currentDraft.status]}
-          </span>
-          {currentDraft.activityGroupTitle ? (
-            <span className="inline-flex items-center gap-1 rounded-full bg-cyan-100 px-2 py-0.5 text-[11px] font-medium text-cyan-700">
-              <span className="h-1.5 w-1.5 rounded-full bg-cyan-500" aria-hidden="true" />
-              {currentDraft.activityGroupTitle}
-            </span>
-          ) : (
-            <DraftSourceBadge aiSource={currentDraft.aiSource} />
-          )}
-          {validationIssues.length > 0 ? (
-            <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[11px] font-medium text-rose-600">
-              {validationIssues.length} issue{validationIssues.length !== 1 ? "s" : ""}
-            </span>
+          {trainingSubject ? (
+            <BadgeTooltip description={`This question belongs to the ${trainingSubject} training subject.`}>
+              <span
+                aria-label={`Training subject: ${trainingSubject}`}
+                className="inline-flex items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-medium text-violet-700"
+                tabIndex={0}
+              >
+                <span className="h-1.5 w-1.5 rounded-full bg-violet-500" aria-hidden="true" />
+                Training: {trainingSubject}
+              </span>
+            </BadgeTooltip>
           ) : null}
-        </div>
-
-        {/* Right: actions */}
-        <div className="flex items-center gap-2">
-          <a
-            href={`/thinkertools-missions-create/drafts/${draftId}/play`}
-            className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
-          >
-            Preview
-          </a>
-          <button
-            type="button"
-            onClick={handlePublish}
-            disabled={publishing || currentDraft.status !== "valid"}
-            className="rounded-md bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-600 disabled:opacity-40"
-          >
-            {publishing ? "Publishing…" : "Publish"}
-          </button>
-          {currentDraft.status === "published" && publishedSlug && !isLive ? (
-            <button
-              type="button"
-              onClick={handleRelease}
-              disabled={releasing}
-              className="rounded-md bg-blue-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-600 disabled:opacity-40"
-            >
-              {releasing ? "Going Live…" : "Go Live"}
-            </button>
+          {currentDraft.activityGroupTitle ? (
+            <BadgeTooltip description="This question belongs to this activity group.">
+              <span
+                aria-label={`${currentDraft.activityGroupTitle}. This question belongs to this activity group.`}
+                className="inline-flex items-center gap-1 rounded-full bg-cyan-100 px-2 py-0.5 text-[11px] font-medium text-cyan-700"
+                tabIndex={0}
+              >
+                <span className="h-1.5 w-1.5 rounded-full bg-cyan-500" aria-hidden="true" />
+                {currentDraft.activityGroupTitle}
+              </span>
+            </BadgeTooltip>
+          ) : (
+            <BadgeTooltip description="Choose an activity group before publishing or creating more questions.">
+              <span
+                aria-label="Needs activity group. Choose an activity group before publishing or creating more questions."
+                className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800"
+                tabIndex={0}
+              >
+                Needs activity group
+              </span>
+            </BadgeTooltip>
+          )}
+          {isTransient ? (
+            <BadgeTooltip description="This question has not been saved yet.">
+              <span
+                aria-label="Not saved. This question has not been saved yet."
+                className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800"
+                tabIndex={0}
+              >
+                Not saved
+              </span>
+            </BadgeTooltip>
+          ) : (
+            <BadgeTooltip description={STATUS_DESCRIPTIONS[currentDraft.status]}>
+              <span
+                aria-label={`${STATUS_LABELS[currentDraft.status]}. ${STATUS_DESCRIPTIONS[currentDraft.status]}`}
+                className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${STATUS_STYLES[currentDraft.status]}`}
+                tabIndex={0}
+              >
+                {STATUS_LABELS[currentDraft.status]}
+              </span>
+            </BadgeTooltip>
+          )}
+          {visibleValidationIssues.length > 0 ? (
+            <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[11px] font-medium text-rose-600">
+              {visibleValidationIssues.length} issue{visibleValidationIssues.length !== 1 ? "s" : ""}
+            </span>
           ) : null}
         </div>
       </div>
@@ -632,9 +1081,9 @@ export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
                   Correct: <span className="font-medium text-emerald-700">{body.correct_answer_labels.join(" + ")}</span>
                 </p>
               ) : null}
-              {validationIssues.length > 0 ? (
+              {visibleValidationIssues.length > 0 ? (
                 <ul className="mt-2 space-y-0.5">
-                  {validationIssues.map((issue, i) => (
+                  {visibleValidationIssues.map((issue, i) => (
                     <li key={i} className="text-[11px] text-rose-600">
                       {issue.path ? `${issue.path}: ` : ""}{issue.message}
                     </li>
@@ -644,30 +1093,69 @@ export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
             </div>
           ) : null}
 
+          {pendingQuestionBatch?.confirmed ? (
+            <div className="mx-4 mb-3 space-y-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+              <p className="text-sm font-semibold text-amber-950">
+                Create {pendingQuestionBatch.questions.length} separate questions
+              </p>
+              <p className="text-xs text-amber-800">
+                {currentDraft.activityGroupTitle
+                  ? `Confirmed activity group: ${currentDraft.activityGroupTitle}`
+                  : "Assign or create an activity group in the manual form before creating this batch."}
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void createPastedQuestionBatch()}
+                  disabled={chatBusy || !currentDraft.activityGroupId}
+                  className="rounded-md bg-amber-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-800 disabled:opacity-40"
+                >
+                  {chatBusy ? "Creating…" : "Create batch"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPendingQuestionBatch(null)}
+                  disabled={chatBusy}
+                  className="rounded-md border border-amber-300 bg-white px-3 py-1.5 text-xs font-medium text-amber-950 hover:bg-amber-100 disabled:opacity-40"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : null}
+
           {/* Chat input */}
           <form
             onSubmit={handleChatSubmit}
-            className="border-t border-slate-100 px-4 py-3 flex gap-2"
+            className="flex flex-wrap gap-2 border-t border-slate-100 px-4 py-3"
           >
-            <input
-              type="text"
+            <textarea
               value={chatInput}
               onChange={(e) => setChatInput(e.target.value)}
-              disabled={chatBusy}
+              onKeyDown={handleChatKeyDown}
+              disabled={chatBusy || pendingQuestionBatch?.confirmed}
+              rows={2}
               placeholder={
-                hasDraftContent
+                pendingQuestionBatch?.confirmed
+                  ? "Confirm the activity group above to continue…"
+                  : pendingQuestionBatch
+                    ? "Reply yes or no…"
+                : hasDraftContent
                   ? "Refine this question, or ask for more questions…"
                   : "Describe what you want learners to practice…"
               }
-              className="flex-1 rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-slate-400 focus:bg-white focus:outline-none disabled:opacity-60"
+              className="min-h-11 flex-1 resize-y rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-slate-400 focus:bg-white focus:outline-none disabled:opacity-60"
             />
             <button
               type="submit"
-              disabled={chatBusy || !chatInput.trim()}
+              disabled={chatBusy || pendingQuestionBatch?.confirmed || !chatInput.trim()}
               className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-40"
             >
               {chatBusy ? "…" : "Send"}
             </button>
+            <p className="basis-full text-[11px] text-slate-400">
+              Enter to send · Shift+Enter for a new line
+            </p>
           </form>
           {chatError ? (
             <p className="px-4 pb-3 text-xs text-rose-600">{chatError}</p>
@@ -680,7 +1168,9 @@ export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
         <form onSubmit={handleSave} className="space-y-4 px-5 py-5">
           <div>
             <h2 className="text-sm font-semibold text-slate-800">Manual Form</h2>
-            <p className="mt-0.5 text-xs text-slate-400">Edit fields directly and save the draft.</p>
+            <p className="mt-0.5 text-xs text-slate-400">
+              Edit fields directly. Saving keeps your changes in this private draft.
+            </p>
           </div>
           <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
             <p className="mb-2 text-xs font-medium text-slate-500">Question</p>
@@ -707,15 +1197,15 @@ export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
             </p>
           </div>
           <p className="text-xs text-slate-400">
-            Fields stay in sync with the AI chat. Saving here updates the draft.
+            Fields stay in sync with the AI chat. Save does not publish or make this question visible to players.
           </p>
 
           {/* Validation issues */}
-          {validationIssues.length > 0 ? (
+          {visibleValidationIssues.length > 0 ? (
             <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3">
               <p className="mb-1.5 text-xs font-semibold text-rose-700">Validation issues</p>
               <ul className="space-y-1">
-                {validationIssues.map((issue, i) => (
+                {visibleValidationIssues.map((issue, i) => (
                   <li key={i} className="text-xs text-rose-700">
                     {issue.path ? <span className="font-medium">{issue.path}: </span> : null}
                     {issue.message}
@@ -726,7 +1216,7 @@ export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
           ) : null}
 
           <label className="flex flex-col gap-1 text-xs text-slate-600">
-            <span className="font-medium">Title</span>
+            <span className="font-medium">Training Subject</span>
             <input
               type="text"
               value={title}
@@ -737,6 +1227,106 @@ export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
               className="rounded-md border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-slate-400 focus:bg-white focus:outline-none disabled:opacity-60"
             />
           </label>
+
+          <div className="flex flex-col gap-1 text-xs text-slate-600">
+            <span className="font-medium">Activity Group</span>
+            {needsActivityGroup ? (
+              <div className="space-y-2 rounded-lg border border-amber-200 bg-amber-50/70 p-3">
+                <p className="text-xs text-amber-900">
+                  Choose where this question belongs, or intentionally create a new group.
+                </p>
+                <div className="flex min-w-0 gap-2">
+                  <label className="sr-only" htmlFor="existing-activity-group">Existing activity group</label>
+                  <select
+                    id="existing-activity-group"
+                    value={selectedActivityGroupId}
+                    onChange={(e) => {
+                      setSelectedActivityGroupId(e.target.value);
+                      setActivityGroupAssignmentError(null);
+                    }}
+                    disabled={assigningActivityGroup || loadingActivityGroups || activityGroups.length === 0}
+                    className="min-w-0 flex-1 rounded-md border border-amber-200 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-amber-400 focus:outline-none disabled:opacity-60"
+                  >
+                    <option value="">
+                      {loadingActivityGroups
+                        ? "Loading groups…"
+                        : activityGroups.length === 0
+                          ? "No existing groups"
+                          : "Choose an existing group…"}
+                    </option>
+                    {activityGroups.map((group) => (
+                      <option key={group.id} value={group.id}>{group.title}</option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={handleExistingActivityGroupAssignment}
+                    disabled={assigningActivityGroup || !selectedActivityGroupId}
+                    className="shrink-0 rounded-md bg-amber-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-800 disabled:opacity-40"
+                  >
+                    Assign
+                  </button>
+                </div>
+
+                <div className="flex min-w-0 gap-2">
+                  <label className="sr-only" htmlFor="new-activity-group-title">New activity group name</label>
+                  <input
+                    id="new-activity-group-title"
+                    type="text"
+                    value={newActivityGroupTitle}
+                    onChange={(e) => {
+                      setNewActivityGroupTitle(e.target.value);
+                      setActivityGroupAssignmentError(null);
+                    }}
+                    disabled={assigningActivityGroup}
+                    maxLength={200}
+                    placeholder="Or name a new group…"
+                    className="min-w-0 flex-1 rounded-md border border-amber-200 bg-white px-3 py-1.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-amber-400 focus:outline-none disabled:opacity-60"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleCreateAndAssignActivityGroup}
+                    disabled={assigningActivityGroup || !newActivityGroupTitle.trim()}
+                    className="shrink-0 rounded-md border border-amber-300 bg-white px-3 py-1.5 text-xs font-medium text-amber-950 hover:bg-amber-100 disabled:opacity-40"
+                  >
+                    {assigningActivityGroup ? "Working…" : "Create & assign"}
+                  </button>
+                </div>
+                {activityGroupsError ? (
+                  <p className="text-xs text-rose-700">{activityGroupsError}</p>
+                ) : null}
+                {activityGroupAssignmentError ? (
+                  <p className="text-xs text-rose-700">{activityGroupAssignmentError}</p>
+                ) : null}
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-1.5">
+                  <span className="min-w-0 truncate text-sm text-slate-900">
+                    {currentDraft.activityGroupTitle}
+                  </span>
+                  {canRemoveActivityGroup ? (
+                    <button
+                      type="button"
+                      onClick={() => void handleRemoveActivityGroup()}
+                      disabled={assigningActivityGroup}
+                      className="shrink-0 text-xs font-medium text-rose-700 hover:text-rose-900 disabled:cursor-wait disabled:opacity-50"
+                    >
+                      {assigningActivityGroup ? "Removing…" : "Remove from group"}
+                    </button>
+                  ) : null}
+                </div>
+                {questionIsLive ? (
+                  <p className="text-xs text-slate-500">
+                    Live questions cannot be removed from their activity group.
+                  </p>
+                ) : null}
+                {activityGroupAssignmentError ? (
+                  <p className="text-xs text-rose-700">{activityGroupAssignmentError}</p>
+                ) : null}
+              </div>
+            )}
+          </div>
 
           <label className="flex flex-col gap-1 text-xs text-slate-600">
             <span className="font-medium">Question text</span>
@@ -767,7 +1357,7 @@ export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
 
           <label className="flex flex-col gap-1 text-xs text-slate-600">
             <span className="font-medium">
-              Correct labels <span className="font-normal text-slate-400">(comma-separated, e.g. A, C)</span>
+              Correct answers <span className="font-normal text-slate-400">(comma-separated, e.g. A, C)</span>
             </span>
             <input
               type="text"
@@ -812,16 +1402,106 @@ export function ActivityEditor({ draft, onDraftChange, fromMessage }: Props) {
             </div>
           </fieldset>
 
-          <div className="flex items-center gap-3 pt-1">
-            <button
-              type="submit"
-              disabled={saving}
-              className="rounded-md bg-slate-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-60"
-            >
-              {saving ? "Saving…" : "Save"}
-            </button>
-            {saveSuccess ? <span className="text-xs text-emerald-600">Saved.</span> : null}
-            {saveError ? <span className="text-xs text-rose-700">{saveError}</span> : null}
+          <div className="border-t border-slate-100 pt-4">
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="submit"
+                disabled={saving}
+                className="rounded-md bg-slate-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-60"
+              >
+                {saving ? "Saving draft…" : "Save draft"}
+              </button>
+              {!isTransient ? (
+                <a
+                  href={`/thinkertools-missions-create/drafts/${draftId}/play`}
+                  className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                >
+                  Preview draft
+                </a>
+              ) : null}
+              <div className="relative inline-flex">
+                <button
+                  type="button"
+                  onClick={() => void handlePublish()}
+                  disabled={publishing || isTransient || !authoringState.readyToPublish}
+                  title={
+                    isTransient
+                      ? "Save this draft before publishing."
+                      : needsActivityGroup
+                      ? "Assign this draft to an activity group before publishing."
+                      : "Create a pending activity from this draft. Players cannot see it until you go live."
+                  }
+                  className="rounded-l-md bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-600 disabled:opacity-40"
+                >
+                  {publishing ? "Publishing…" : "Publish as pending"}
+                </button>
+                <button
+                  type="button"
+                  aria-label="More publishing options"
+                  aria-haspopup="menu"
+                  aria-expanded={publishMenuOpen}
+                  onClick={() => setPublishMenuOpen((open) => !open)}
+                  disabled={publishing || isTransient || !authoringState.readyToPublish}
+                  className="rounded-r-md border-l border-emerald-600 bg-emerald-700 px-2 py-1.5 text-xs font-medium text-white hover:bg-emerald-600 disabled:opacity-40"
+                >
+                  <svg viewBox="0 0 16 16" aria-hidden="true" className="h-3 w-3 fill-current">
+                    <path d="M4.2 6.1 8 9.9l3.8-3.8.9.9L8 11.7 3.3 7l.9-.9Z" />
+                  </svg>
+                </button>
+                {publishMenuOpen ? (
+                  <div
+                    role="menu"
+                    className="absolute right-0 top-full z-10 mt-1 w-52 rounded-md border border-slate-200 bg-white p-1 shadow-lg"
+                  >
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => void handlePublish(true)}
+                      className="w-full rounded px-3 py-2 text-left text-xs text-slate-700 hover:bg-slate-50"
+                    >
+                      <span className="block font-medium text-slate-900">Publish &amp; go live</span>
+                      <span className="block pt-0.5 text-slate-500">Make this activity visible to players now.</span>
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+              {currentDraft.status === "published" && publishedSlug && !isLive ? (
+                <button
+                  type="button"
+                  onClick={handleRelease}
+                  disabled={releasing || needsActivityGroup}
+                  title={needsActivityGroup ? "Assign an activity group before going live." : undefined}
+                  className="rounded-md bg-blue-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-600 disabled:opacity-40"
+                >
+                  {releasing ? "Going Live…" : "Go Live"}
+                </button>
+              ) : null}
+              {saveSuccess ? <span className="text-xs text-emerald-600">Draft saved — not published.</span> : null}
+              {saveError ? <span className="text-xs text-rose-700">{saveError}</span> : null}
+              {deleteError ? <span className="text-xs text-rose-700">{deleteError}</span> : null}
+              {!isTransient && (currentDraft.status === "draft" || currentDraft.status === "valid") ? (
+                <button
+                  type="button"
+                  onClick={() => void handleDeleteDraft()}
+                  disabled={deleting}
+                  aria-label="Delete draft"
+                  title="Delete draft"
+                  className="ml-auto flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-rose-600 text-white hover:bg-rose-700 disabled:cursor-wait disabled:opacity-60"
+                >
+                  {deleting ? (
+                    <span className="text-xs" aria-hidden="true">…</span>
+                  ) : (
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="h-4 w-4" aria-hidden="true">
+                      <path fillRule="evenodd" d="M5 3.25V4H2.75a.75.75 0 0 0 0 1.5h.3l.815 8.15A1.5 1.5 0 0 0 5.357 15h5.285a1.5 1.5 0 0 0 1.493-1.35l.815-8.15h.3a.75.75 0 0 0 0-1.5H11v-.75A2.25 2.25 0 0 0 8.75 1h-1.5A2.25 2.25 0 0 0 5 3.25Zm2.25-.75a.75.75 0 0 0-.75.75V4h3v-.75a.75.75 0 0 0-.75-.75h-1.5ZM6.05 6a.75.75 0 0 1 .787.713l.275 5.5a.75.75 0 0 1-1.498.075l-.275-5.5A.75.75 0 0 1 6.05 6Zm3.9 0a.75.75 0 0 1 .712.787l-.275 5.5a.75.75 0 0 1-1.498-.075l.275-5.5A.75.75 0 0 1 9.95 6Z" clipRule="evenodd" />
+                    </svg>
+                  )}
+                </button>
+              ) : null}
+            </div>
+            <p className="mt-3 text-xs text-slate-600">
+              <span className="font-medium text-slate-800">How this works:</span>{" "}
+              Save keeps your edits in this private draft. Publish as pending creates an activity for review, or use the menu to publish and make it live now.
+            </p>
           </div>
         </form>
       </div>

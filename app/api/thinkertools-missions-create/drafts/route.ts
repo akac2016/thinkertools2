@@ -7,7 +7,7 @@ import { requireActorIdFromRequest } from "@/lib/auth/actor";
 import type { ContentDraft } from "@/lib/authoring/draft-types";
 import { createDraft, listDraftsByCreator, updateDraft } from "@/lib/authoring/server";
 import { validateDraft } from "@/lib/authoring/validation";
-import { jsonSuccess } from "@/lib/http";
+import { jsonError, jsonSuccess } from "@/lib/http";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 
 const createDraftBodySchema = z.object({
@@ -92,6 +92,35 @@ export async function POST(request: Request) {
     }
 
     const { contentType, primaryTrainingId, activityGroupId, title, body, slug } = parsedBody.data;
+
+    if (activityGroupId) {
+      if (contentType !== "activity") {
+        return jsonError("Only activity drafts can belong to an activity group.", {
+          status: 409,
+          code: "AUTHORING_ACTIVITY_GROUP_INAPPLICABLE",
+        });
+      }
+
+      const { data: activityGroup, error: activityGroupError } = await supabaseAdmin
+        .from("training_activity_groups")
+        .select("id, training_id, publication_status")
+        .eq("id", activityGroupId)
+        .maybeSingle();
+
+      if (activityGroupError) throw new Error(activityGroupError.message);
+      if (!activityGroup || activityGroup.publication_status === "archived") {
+        return jsonError("Activity group not found.", {
+          status: 404,
+          code: "AUTHORING_ACTIVITY_GROUP_NOT_FOUND",
+        });
+      }
+      if (activityGroup.training_id !== primaryTrainingId) {
+        return jsonError("Choose an activity group from this draft's training subject.", {
+          status: 409,
+          code: "AUTHORING_ACTIVITY_GROUP_SUBJECT_MISMATCH",
+        });
+      }
+    }
 
     const draftBody = body ?? {};
     const validationIssues = validateDraft(contentType, draftBody);

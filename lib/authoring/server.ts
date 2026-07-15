@@ -178,14 +178,14 @@ export async function listDraftsByCreator(
 }
 
 // ---------------------------------------------------------------------------
-// Archive (soft-delete)
+// Delete
 // ---------------------------------------------------------------------------
 
-export async function archiveDraft(id: string): Promise<void> {
+export async function deleteDraft(id: string): Promise<void> {
   const { error } = await supabaseAdmin
     .from("content_drafts")
-    .update({ status: "archived" })
+    .delete()
     .eq("id", id);
 
-  if (error) throw new Error(`archiveDraft failed: ${error.message}`);
+  if (error) throw new Error(`deleteDraft failed: ${error.message}`);
 }

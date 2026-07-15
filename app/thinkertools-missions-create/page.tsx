@@ -6,7 +6,14 @@ import { useRouter } from "next/navigation";
 
 import { apiFetch, isApiRequestError } from "@/components/quipx/client";
 import { DraftList } from "@/components/thinkertools-missions-create/draft-list";
+import { SubjectWorkspace } from "@/components/thinkertools-missions-create/subject-workspace";
+import type {
+  AuthoringActivityGroup,
+  UncategorizedActivityContent,
+} from "@/components/thinkertools-missions-create/activity-group-browser";
+import { ActivityGroupsJumpLink } from "@/components/thinkertools-missions-create/activity-groups-jump-link";
 import type { ContentDraft, DraftContentType } from "@/lib/authoring/draft-types";
+import { extractPastedQuestionBatch } from "@/lib/authoring/question-batch";
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -14,7 +21,6 @@ import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
 // Guided flow:
 //   subject → format → describe → generate → editor
 type FlowStep = "subject" | "format" | "describe";
-type ViewMode = "chat" | "manual";
 
 type Training = { 
   id: string; 
@@ -26,11 +32,35 @@ type Training = {
   isDraftOnly?: boolean;
   hasReleasableContent?: boolean;
 };
-type ActivityGroup = { id: string; slug: string; title: string; description: string; training_id: string };
+type ActivityGroup = {
+  id: string;
+  slug: string;
+  title: string;
+  description: string;
+  training_id: string;
+  questionCount?: number;
+  questions?: Array<{
+    id: string;
+    title: string;
+    questionText: string;
+    difficultyLabel: string;
+    publicationStatus: "pending" | "live";
+  }>;
+  draftStatusCounts?: Partial<Record<ContentDraft["status"], number>>;
+  drafts?: Array<{
+    id: string;
+    title: string;
+    questionText: string;
+    status: ContentDraft["status"];
+  }>;
+};
 
 type ListTrainingsResponse = { trainings: Training[] };
 type CreateTrainingResponse = { training: Training };
-type ListGroupsResponse = { groups: ActivityGroup[] };
+type ListGroupsResponse = {
+  groups: ActivityGroup[];
+  uncategorized: UncategorizedActivityContent;
+};
 type CreateGroupResponse = { group: ActivityGroup };
 type ListDraftsResponse = { drafts: ContentDraft[] };
 type CreateDraftResponse = { draft: ContentDraft };
@@ -68,14 +98,6 @@ function tokenizeIntent(value: string): string[] {
     .filter((word) => word.length > 0 && !INTENT_STOP_WORDS.has(word));
 }
 
-function normalizeCategoryLabel(value: string): string {
-  return value.trim().replace(/\s+/g, " ");
-}
-
-function categoryKey(value: string): string {
-  return normalizeCategoryLabel(value).toLowerCase();
-}
-
 function isIdeationPrompt(intent: string): boolean {
   const normalized = intent.toLowerCase().trim();
   if (!normalized) return false;
@@ -84,6 +106,30 @@ function isIdeationPrompt(intent: string): boolean {
   ];
   if (markers.some((marker) => normalized.includes(marker))) return true;
   return normalized === "ideas" || normalized === "suggest ideas";
+}
+
+function requestsMultipleQuestions(input: string): boolean {
+  const normalized = input.toLowerCase().trim();
+  if (!normalized.includes("question")) return false;
+
+  const numericCount = normalized.match(/\b(\d+)\s+(?:new\s+|additional\s+)?questions?\b/);
+  if (numericCount && Number.parseInt(numericCount[1], 10) > 1) return true;
+
+  if (
+    /\b(?:two|three|four|five|six|seven|eight|nine|ten)\s+(?:new\s+|additional\s+)?questions?\b/.test(
+      normalized,
+    )
+  ) {
+    return true;
+  }
+
+  if (/\b(?:multiple|several|some|a few|a couple of)\s+(?:new\s+|additional\s+)?questions\b/.test(normalized)) {
+    return true;
+  }
+
+  return /\b(?:generate|create|write|draft|make|add|give me)\b[^.!?]{0,80}\bquestions\b/.test(
+    normalized,
+  );
 }
 
 type BroadIntentOption = {
@@ -103,6 +149,11 @@ type ActivityPhase =
   | { kind: "await_readiness"; topic: string }
   | { kind: "await_focus"; topic: string }
   | { kind: "ideation"; topic: string; options: BroadIntentOption[] };
+
+type PendingQuestionBatch = {
+  questions: string[];
+  stage: "confirm" | "choose_group";
+};
 
 function isBroadIntent(intent: string): boolean {
   const normalized = intent.trim().toLowerCase();
@@ -253,9 +304,18 @@ export default function MissionsCreatePage() {
     t.publication_status === 'live' && !t.isEmpty
   );
 
+  const manualTrainings = trainings.filter(
+    (training) => training.publication_status !== "archived",
+  );
+
   // ── Activity group data ──────────────────────────────────────────────────
   const [groups, setGroups] = useState<ActivityGroup[]>([]);
-  const [selectedGroup, setSelectedGroup] = useState<ActivityGroup | null>(null);
+  const [uncategorized, setUncategorized] = useState<UncategorizedActivityContent>({
+    questions: [],
+    drafts: [],
+  });
+  const [loadingGroups, setLoadingGroups] = useState(false);
+  const [groupsError, setGroupsError] = useState<string | null>(null);
 
   // ── Guided flow state ────────────────────────────────────────────────────
   const [step, setStep] = useState<FlowStep>("subject");
@@ -263,15 +323,13 @@ export default function MissionsCreatePage() {
   const [selectedContentType, setSelectedContentType] = useState<DraftContentType | null>(null);
   const [activeFormatOption, setActiveFormatOption] = useState<DraftContentType>("activity");
 
-  // ── View toggle ──────────────────────────────────────────────────────────
-  const [view, setView] = useState<ViewMode>("chat");
-
   // ── Draft list ───────────────────────────────────────────────────────────
   const [drafts, setDrafts] = useState<ContentDraft[]>([]);
   const [loadingDrafts, setLoadingDrafts] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
 
   // ── Manual form state ────────────────────────────────────────────────────
+  const [manualTrainingId, setManualTrainingId] = useState("");
   const [formContentType, setFormContentType] = useState<DraftContentType>("activity");
   const [formTitle, setFormTitle] = useState("");
   const [formCreating, setFormCreating] = useState(false);
@@ -288,25 +346,36 @@ export default function MissionsCreatePage() {
     toTrainingTitle: string;
     queuedIntent: string;
   } | null>(null);
+  const [pendingQuestionBatch, setPendingQuestionBatch] = useState<PendingQuestionBatch | null>(null);
+  const [batchActivityGroupId, setBatchActivityGroupId] = useState("");
+  const [newBatchActivityGroupTitle, setNewBatchActivityGroupTitle] = useState("");
+  const [batchError, setBatchError] = useState<string | null>(null);
   const chatMessagesRef = useRef<HTMLDivElement>(null);
   const chatBottomRef = useRef<HTMLDivElement>(null);
   const trainingFormRef = useRef<HTMLFormElement>(null);
   const chatFormRef = useRef<HTMLFormElement>(null);
-  const chatInputRef = useRef<HTMLInputElement>(null);
+  const chatInputRef = useRef<HTMLTextAreaElement>(null);
   const manualFormRef = useRef<HTMLFormElement>(null);
   const activityFormatButtonRef = useRef<HTMLButtonElement>(null);
   const missionFormatButtonRef = useRef<HTMLButtonElement>(null);
 
   async function loadGroupsForTraining(trainingId: string): Promise<ActivityGroup[]> {
+    setLoadingGroups(true);
+    setGroupsError(null);
     try {
       const result = await apiFetch<ListGroupsResponse>(
         `/api/thinkertools-missions-create/activity-groups?trainingId=${trainingId}`,
       );
       setGroups(result.groups);
+      setUncategorized(result.uncategorized);
       return result.groups;
     } catch {
       setGroups([]);
+      setUncategorized({ questions: [], drafts: [] });
+      setGroupsError("Failed to load activity groups.");
       return [];
+    } finally {
+      setLoadingGroups(false);
     }
   }
 
@@ -480,30 +549,35 @@ export default function MissionsCreatePage() {
   }, [messages]);
 
   useEffect(() => {
-    if (!selectedTraining || view !== "chat" || step !== "format") return;
+    if (!selectedTraining || step !== "format") return;
     const animationFrame = window.requestAnimationFrame(() => {
       activityFormatButtonRef.current?.focus();
     });
 
     return () => window.cancelAnimationFrame(animationFrame);
-  }, [selectedTraining, step, view]);
+  }, [selectedTraining, step]);
 
   useEffect(() => {
-    if (!selectedTraining || view !== "chat" || step !== "describe" || chatBusy) return;
+    if (!selectedTraining || step !== "describe" || chatBusy) return;
     const animationFrame = window.requestAnimationFrame(() => {
       chatInputRef.current?.focus();
     });
     return () => window.cancelAnimationFrame(animationFrame);
-  }, [selectedTraining, view, step, chatBusy, activityPhase.kind, pendingTrainingSwitch]);
+  }, [selectedTraining, step, chatBusy, activityPhase.kind, pendingTrainingSwitch]);
 
   // ── Step 1: select training ───────────────────────────────────────────────
   function selectTraining(training: Training) {
     setSelectedTraining(training);
+    setManualTrainingId(training.id);
     setSelectedContentType(null);
-    setSelectedGroup(null);
     setActivityPhase({ kind: "idle" });
     setPendingTrainingSwitch(null);
+    setPendingQuestionBatch(null);
+    setBatchActivityGroupId("");
+    setNewBatchActivityGroupTitle("");
+    setBatchError(null);
     setActiveFormatOption("activity");
+    void loadGroupsForTraining(training.id);
     setStep("format");
     setMessages([
       { id: nextId(), role: "user", text: training.title },
@@ -535,9 +609,12 @@ export default function MissionsCreatePage() {
   async function selectFormat(contentType: DraftContentType) {
     setActiveFormatOption(contentType);
     setSelectedContentType(contentType);
-    setSelectedGroup(null);
     setActivityPhase({ kind: "idle" });
     setPendingTrainingSwitch(null);
+    setPendingQuestionBatch(null);
+    setBatchActivityGroupId("");
+    setNewBatchActivityGroupTitle("");
+    setBatchError(null);
     const label = contentType === "activity" ? "Quick practice questions" : "Story-based mission";
     setMessages((prev) => [...prev, { id: nextId(), role: "user", text: label }]);
 
@@ -561,29 +638,90 @@ export default function MissionsCreatePage() {
     }]);
   }
 
-  async function resolveTrainingActivityGroup(
-    training: Training,
-    availableGroups = groups,
-  ): Promise<ActivityGroup> {
-    const title = normalizeCategoryLabel(training.title);
-    const existingGroup = availableGroups.find((group) => categoryKey(group.title) === categoryKey(title));
-    if (existingGroup) return existingGroup;
+  async function createConfirmedQuestionBatch(activityGroupId: string) {
+    if (!pendingQuestionBatch || !selectedTraining || chatBusy) return;
 
-    const result = await apiFetch<CreateGroupResponse>(
-      "/api/thinkertools-missions-create/activity-groups",
-      {
-        method: "POST",
-        body: JSON.stringify({
-          trainingId: training.id,
-          title,
-        }),
-      },
-    );
-    setGroups((prev) => {
-      if (prev.some((group) => group.id === result.group.id)) return prev;
-      return [...prev, result.group];
-    });
-    return result.group;
+    setChatBusy(true);
+    setBatchError(null);
+    try {
+      const createdDrafts: ContentDraft[] = [];
+      for (const question of pendingQuestionBatch.questions) {
+        const created = await apiFetch<CreateDraftResponse>(
+          "/api/thinkertools-missions-create/drafts",
+          {
+            method: "POST",
+            body: JSON.stringify({
+              contentType: "activity",
+              primaryTrainingId: selectedTraining.id,
+              activityGroupId,
+              title: selectedTraining.title,
+            }),
+          },
+        );
+        const generated = await apiFetch<CreateDraftResponse>(
+          `/api/thinkertools-missions-create/drafts/${created.draft.id}/generate`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              description: `Build one activity from this teacher-provided question while preserving its intent: ${question}`,
+            }),
+          },
+        );
+        createdDrafts.push(generated.draft);
+      }
+
+      setDrafts((prev) => [...createdDrafts, ...prev]);
+      setPendingQuestionBatch(null);
+      setBatchActivityGroupId("");
+      setNewBatchActivityGroupTitle("");
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: nextId(),
+          role: "assistant",
+          text: `Created ${createdDrafts.length} separate questions in the confirmed activity group.`,
+        },
+      ]);
+      const firstDraft = createdDrafts[0];
+      if (firstDraft) {
+        router.push(`/thinkertools-missions-create/drafts/${firstDraft.id}`);
+      }
+    } catch (error) {
+      setBatchError(
+        isApiRequestError(error) ? error.message : "Failed to create the question batch.",
+      );
+    } finally {
+      setChatBusy(false);
+    }
+  }
+
+  async function handleCreateBatchActivityGroup() {
+    const title = newBatchActivityGroupTitle.trim();
+    if (!selectedTraining || !title || chatBusy) return;
+
+    setChatBusy(true);
+    setBatchError(null);
+    try {
+      const result = await apiFetch<CreateGroupResponse>(
+        "/api/thinkertools-missions-create/activity-groups",
+        {
+          method: "POST",
+          body: JSON.stringify({ trainingId: selectedTraining.id, title }),
+        },
+      );
+      setGroups((prev) =>
+        prev.some((group) => group.id === result.group.id)
+          ? prev
+          : [...prev, result.group],
+      );
+      setChatBusy(false);
+      await createConfirmedQuestionBatch(result.group.id);
+    } catch (error) {
+      setBatchError(
+        isApiRequestError(error) ? error.message : "Failed to create the activity group.",
+      );
+      setChatBusy(false);
+    }
   }
 
   // ── Step 4: describe + generate ──────────────────────────────────────────
@@ -599,8 +737,45 @@ export default function MissionsCreatePage() {
     try {
       let generationDescription = text;
       let activeTraining = selectedTraining;
-      let activeGroups = groups;
       let shouldCheckShift = selectedContentType === "activity" && activityPhase.kind === "idle";
+
+      if (pendingQuestionBatch?.stage === "confirm") {
+        if (isAffirmative(text)) {
+          setPendingQuestionBatch({
+            ...pendingQuestionBatch,
+            stage: "choose_group",
+          });
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: nextId(),
+              role: "assistant",
+              text: "Choose one existing activity group below, or intentionally name and create a new group for the whole batch.",
+            },
+          ]);
+        } else if (isNegative(text)) {
+          setPendingQuestionBatch(null);
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: nextId(),
+              role: "assistant",
+              text: "Nothing was saved. Split the questions into intentional sets, then add each set to its chosen activity group. You can start with one question at a time here.",
+            },
+          ]);
+        } else {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: nextId(),
+              role: "assistant",
+              text: "Please reply yes if every pasted question belongs in one activity group, or no if they should be separated.",
+            },
+          ]);
+        }
+        setChatBusy(false);
+        return;
+      }
 
       if (pendingTrainingSwitch) {
         if (isAffirmative(text)) {
@@ -608,10 +783,8 @@ export default function MissionsCreatePage() {
           if (targetTraining) {
             activeTraining = targetTraining;
             setSelectedTraining(targetTraining);
-            setSelectedGroup(null);
             setActivityPhase({ kind: "idle" });
-            const loadedGroups = await loadGroupsForTraining(targetTraining.id);
-            activeGroups = loadedGroups;
+            await loadGroupsForTraining(targetTraining.id);
             setMessages((prev) => [
               ...prev,
               {
@@ -815,10 +988,50 @@ export default function MissionsCreatePage() {
         }
       }
 
-      let resolvedActivityGroup = selectedGroup?.training_id === activeTraining.id ? selectedGroup : null;
-      if (selectedContentType === "activity" && !resolvedActivityGroup) {
-        resolvedActivityGroup = await resolveTrainingActivityGroup(activeTraining, activeGroups);
-        setSelectedGroup(resolvedActivityGroup);
+      if (
+        selectedContentType === "activity"
+        && extractPastedQuestionBatch(generationDescription)
+      ) {
+        const questions = extractPastedQuestionBatch(generationDescription) ?? [];
+        if (questions.length > 10) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: nextId(),
+              role: "assistant",
+              text: `I found ${questions.length} questions. Split this into batches of 10 or fewer so each set can be reviewed and assigned intentionally. Nothing was saved.`,
+            },
+          ]);
+          setChatBusy(false);
+          return;
+        }
+        setPendingQuestionBatch({ questions, stage: "confirm" });
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: nextId(),
+            role: "assistant",
+            text: `I found ${questions.length} separate questions. Do they all belong in the same activity group? Reply yes or no. Nothing will be saved until you confirm.`,
+          },
+        ]);
+        setChatBusy(false);
+        return;
+      }
+
+      if (
+        selectedContentType === "activity"
+        && requestsMultipleQuestions(generationDescription)
+      ) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: nextId(),
+            role: "assistant",
+            text: "Multi-question generation needs a confirmed activity group so every question has one destination. Choose an existing group below and use “Add question here.” If you need a new group, draft one exploratory question first, then create and assign its group before asking for more.",
+          },
+        ]);
+        setChatBusy(false);
+        return;
       }
 
       const created = await apiFetch<CreateDraftResponse>(
@@ -828,7 +1041,7 @@ export default function MissionsCreatePage() {
           body: JSON.stringify({
             contentType: selectedContentType,
             primaryTrainingId: activeTraining.id,
-            activityGroupId: resolvedActivityGroup?.id ?? null,
+            activityGroupId: null,
             title: selectedContentType === "activity" ? activeTraining.title : undefined,
           }),
         },
@@ -852,21 +1065,21 @@ export default function MissionsCreatePage() {
   // ── Manual form create ────────────────────────────────────────────────────
   async function handleFormCreate(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (!selectedTraining) return;
+    const manualTraining = manualTrainings.find((training) => training.id === manualTrainingId);
+    if (!manualTraining) {
+      setFormError("Choose a subject before creating a manual draft.");
+      return;
+    }
     setFormCreating(true); setFormError(null);
     try {
-      const activityGroup = formContentType === "activity"
-        ? await resolveTrainingActivityGroup(selectedTraining)
-        : null;
-
       const result = await apiFetch<CreateDraftResponse>(
         "/api/thinkertools-missions-create/drafts",
         {
           method: "POST",
           body: JSON.stringify({
             contentType: formContentType,
-            primaryTrainingId: selectedTraining.id,
-            activityGroupId: activityGroup?.id ?? null,
+            primaryTrainingId: manualTraining.id,
+            activityGroupId: null,
             title: formTitle.trim() || undefined,
           }),
         },
@@ -878,10 +1091,19 @@ export default function MissionsCreatePage() {
     }
   }
 
+  async function handleAddQuestionHere(group: AuthoringActivityGroup) {
+    if (!selectedTraining) {
+      throw new Error("Choose a subject before adding a question.");
+    }
+    router.push(
+      `/thinkertools-missions-create/drafts/new?trainingId=${encodeURIComponent(selectedTraining.id)}&activityGroupId=${encodeURIComponent(group.id)}`,
+    );
+  }
+
   function handlePageKeyDown(event: KeyboardEvent<HTMLElement>) {
     const target = event.target as HTMLElement | null;
 
-    if (selectedTraining && view === "chat" && step === "format") {
+    if (selectedTraining && step === "format") {
       if (target?.closest("input,select,textarea,[contenteditable='true']")) {
         return;
       }
@@ -935,23 +1157,93 @@ export default function MissionsCreatePage() {
       return;
     }
 
-    if (step === "subject" && view === "chat" && newTrainingTitle.trim() && !creatingTraining) {
+    if (target?.closest("form")) {
+      return;
+    }
+
+    if (step === "subject" && newTrainingTitle.trim() && !creatingTraining) {
       event.preventDefault();
       trainingFormRef.current?.requestSubmit();
       return;
     }
 
-    if (selectedTraining && view === "chat" && step === "describe" && chatInput.trim() && !chatBusy) {
+    if (selectedTraining && step === "describe" && chatInput.trim() && !chatBusy) {
       event.preventDefault();
       chatFormRef.current?.requestSubmit();
       return;
     }
 
-    if (selectedTraining && view === "manual" && !formCreating) {
-      event.preventDefault();
-      manualFormRef.current?.requestSubmit();
-    }
   }
+
+  const manualDraftForm = (
+    <form
+      ref={manualFormRef}
+      onSubmit={handleFormCreate}
+      className="space-y-4 bg-slate-50/60 px-5 py-5"
+    >
+      <div>
+        <h2 className="text-sm font-semibold text-slate-700">Manual draft</h2>
+        <p className="mt-1 text-xs text-slate-500">
+          Skip chat and open a blank draft directly in the editor.
+        </p>
+      </div>
+      <label className="flex flex-col gap-1 text-xs text-slate-600">
+        <span className="font-medium">Subject</span>
+        <select
+          value={manualTrainingId}
+          onChange={(event) => {
+            setManualTrainingId(event.target.value);
+            setFormError(null);
+          }}
+          disabled={formCreating || loadingTrainings}
+          className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-slate-400 focus:outline-none disabled:opacity-60"
+        >
+          <option value="">Choose a subject…</option>
+          {manualTrainings.map((training) => (
+            <option key={training.id} value={training.id}>
+              {training.title}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="flex flex-col gap-1 text-xs text-slate-600">
+        <span className="font-medium">Content type</span>
+        <select
+          value={formContentType}
+          onChange={(event) => setFormContentType(event.target.value as DraftContentType)}
+          disabled={formCreating}
+          className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-slate-400 focus:outline-none disabled:opacity-60"
+        >
+          <option value="activity">Quick practice questions (Activity)</option>
+          <option value="mission">Story-based mission (Mission)</option>
+        </select>
+      </label>
+      <label className="flex flex-col gap-1 text-xs text-slate-600">
+        <span className="font-medium">
+          Title <span className="font-normal text-slate-400">(optional)</span>
+        </span>
+        <input
+          type="text"
+          value={formTitle}
+          onChange={(event) => setFormTitle(event.target.value)}
+          disabled={formCreating}
+          placeholder="Untitled"
+          maxLength={300}
+          className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-slate-400 focus:outline-none disabled:opacity-60"
+        />
+      </label>
+      <div className="flex flex-wrap items-center gap-3 pt-1">
+        <button
+          type="submit"
+          disabled={formCreating || !manualTrainingId}
+          className="rounded-md bg-slate-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-40"
+        >
+          {formCreating ? "Creating…" : "Create blank draft"}
+        </button>
+        {formError ? <span className="text-xs text-rose-600">{formError}</span> : null}
+      </div>
+    </form>
+  );
 
   // ─── Render ───────────────────────────────────────────────────────────────
 
@@ -966,7 +1258,7 @@ export default function MissionsCreatePage() {
   }
 
   return (
-    <main className="mx-auto max-w-2xl px-4 py-10 sm:px-6" onKeyDown={handlePageKeyDown}>
+    <main className="mx-auto max-w-5xl px-4 py-10 sm:px-6" onKeyDown={handlePageKeyDown}>
       <header className="mb-6">
         <h1 className="text-2xl font-semibold text-slate-900">Content Authoring</h1>
       </header>
@@ -974,25 +1266,26 @@ export default function MissionsCreatePage() {
       <div className="mb-10 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
 
         {/* Top bar */}
-        {selectedTraining ? (
-          <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+        <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+          {selectedTraining ? (
             <div className="flex items-center gap-2">
-              <button type="button" onClick={() => { setSelectedTraining(null); setSelectedContentType(null); setSelectedGroup(null); setActivityPhase({ kind: "idle" }); setPendingTrainingSwitch(null); setStep("subject"); setMessages([]); }} className="flex h-6 w-6 items-center justify-center rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-600" aria-label="Go back">
+              <button type="button" onClick={() => { setSelectedTraining(null); setSelectedContentType(null); setActivityPhase({ kind: "idle" }); setPendingTrainingSwitch(null); setStep("subject"); setMessages([]); }} className="flex h-6 w-6 items-center justify-center rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-600" aria-label="Go back">
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4"><path fillRule="evenodd" d="M17 10a.75.75 0 00-.75-.75H5.612l4.158-3.96a.75.75 0 10-1.04-1.08l-5.5 5.25a.75.75 0 000 1.08l5.5 5.25a.75.75 0 101.04-1.08L5.612 10.75H16.25A.75.75 0 0017 10z" clipRule="evenodd" /></svg>
               </button>
               <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">{selectedTraining.title}</span>
             </div>
-            <div className="flex rounded-lg border border-slate-200 bg-slate-50 p-0.5">
-              <button type="button" onClick={() => setView("chat")} className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${view === "chat" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>AI Chat</button>
-              <button type="button" onClick={() => setView("manual")} className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${view === "manual" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>Manual</button>
-            </div>
-          </div>
-        ) : null}
+          ) : (
+            <p className="text-xs font-medium text-slate-500">Start authoring</p>
+          )}
+          {selectedTraining ? <p className="text-xs text-slate-500">Choose either authoring path below.</p> : null}
+        </div>
 
         {/* ── STEP 1: Subject ────────────────────────────────────────────── */}
-        {step === "subject" && view === "chat" ? (
-          <>
+        {step === "subject" ? (
+          <div className="grid md:grid-cols-2">
+            <section className="min-w-0 border-b border-slate-100 md:border-b-0 md:border-r">
             <div className="border-b border-slate-100 px-5 py-4">
+              <h2 className="text-sm font-semibold text-slate-700">Guided authoring</h2>
               <p className="text-sm font-medium text-slate-800">What subject are you teaching?</p>
               <p className="mt-0.5 text-xs text-slate-400">Pick an existing track or create a new one.</p>
             </div>
@@ -1019,12 +1312,19 @@ export default function MissionsCreatePage() {
               </form>
               {trainingError ? <p className="mt-2 text-xs text-rose-600">{trainingError}</p> : null}
             </div>
-          </>
+            </section>
+            {manualDraftForm}
+          </div>
         ) : null}
 
         {/* ── STEPS 2–4: Chat flow ───────────────────────────────────────── */}
-        {selectedTraining && view === "chat" ? (
-          <>
+        {selectedTraining ? (
+          <div className="grid md:grid-cols-2">
+            <section className="min-w-0 border-b border-slate-100 md:border-b-0 md:border-r">
+              <div className="border-b border-slate-100 px-4 py-3">
+                <h2 className="text-sm font-semibold text-slate-700">AI-assisted draft</h2>
+                <p className="mt-0.5 text-xs text-slate-500">Use chat for guided question or mission creation.</p>
+              </div>
             <div ref={chatMessagesRef} className="max-h-[420px] space-y-4 overflow-y-auto px-4 py-4">
               {messages.map((msg) => (
                 <div key={msg.id}>
@@ -1096,21 +1396,93 @@ export default function MissionsCreatePage() {
               <div ref={chatBottomRef} />
             </div>
 
+            {pendingQuestionBatch?.stage === "choose_group" ? (
+              <div className="space-y-3 border-t border-amber-200 bg-amber-50/70 px-4 py-4">
+                <div>
+                  <p className="text-sm font-semibold text-amber-950">
+                    Place {pendingQuestionBatch.questions.length} questions together
+                  </p>
+                  <p className="mt-1 text-xs text-amber-800">
+                    Creating the batch requires one teacher-confirmed activity group.
+                  </p>
+                </div>
+                <div className="flex min-w-0 gap-2">
+                  <label className="sr-only" htmlFor="batch-activity-group">Existing activity group</label>
+                  <select
+                    id="batch-activity-group"
+                    value={batchActivityGroupId}
+                    onChange={(event) => {
+                      setBatchActivityGroupId(event.target.value);
+                      setBatchError(null);
+                    }}
+                    disabled={chatBusy || loadingGroups || groups.length === 0}
+                    className="min-w-0 flex-1 rounded-md border border-amber-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-amber-400 focus:outline-none disabled:opacity-60"
+                  >
+                    <option value="">
+                      {loadingGroups
+                        ? "Loading groups…"
+                        : groups.length === 0
+                          ? "No existing groups"
+                          : "Choose an existing group…"}
+                    </option>
+                    {groups.map((group) => (
+                      <option key={group.id} value={group.id}>{group.title}</option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => void createConfirmedQuestionBatch(batchActivityGroupId)}
+                    disabled={chatBusy || !batchActivityGroupId}
+                    className="shrink-0 rounded-md bg-amber-900 px-3 py-2 text-xs font-medium text-white hover:bg-amber-800 disabled:opacity-40"
+                  >
+                    Create batch
+                  </button>
+                </div>
+                <div className="flex min-w-0 gap-2">
+                  <label className="sr-only" htmlFor="new-batch-activity-group">New activity group name</label>
+                  <input
+                    id="new-batch-activity-group"
+                    type="text"
+                    value={newBatchActivityGroupTitle}
+                    onChange={(event) => {
+                      setNewBatchActivityGroupTitle(event.target.value);
+                      setBatchError(null);
+                    }}
+                    disabled={chatBusy}
+                    maxLength={200}
+                    placeholder="Or name a new group…"
+                    className="min-w-0 flex-1 rounded-md border border-amber-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-amber-400 focus:outline-none disabled:opacity-60"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void handleCreateBatchActivityGroup()}
+                    disabled={chatBusy || !newBatchActivityGroupTitle.trim()}
+                    className="shrink-0 rounded-md border border-amber-300 bg-white px-3 py-2 text-xs font-medium text-amber-950 hover:bg-amber-100 disabled:opacity-40"
+                  >
+                    Create group & batch
+                  </button>
+                </div>
+                {batchError ? <p className="text-xs text-rose-700">{batchError}</p> : null}
+              </div>
+            ) : null}
+
             {/* Chat input */}
             {step === "describe" ? (
               <>
                 <form ref={chatFormRef} onSubmit={handleChatSubmit} className="border-t border-slate-100 px-4 py-3 flex gap-2">
-                  <input
+                  <textarea
                     ref={chatInputRef}
-                    type="text"
                     value={chatInput}
                     onChange={(e) => setChatInput(e.target.value)}
-                    disabled={chatBusy}
+                    disabled={chatBusy || pendingQuestionBatch?.stage === "choose_group"}
+                    rows={2}
                     placeholder={
                       selectedContentType === "mission"
                         ? "Describe the scenario, setting, and conflict…"
                         : pendingTrainingSwitch
                           ? "Reply yes or no to switch subject…"
+                        : pendingQuestionBatch?.stage === "choose_group"
+                          ? "Choose an activity group above to continue…"
                         : activityPhase.kind === "await_readiness"
                           ? "Say: I have ideas, need ideas, or share a focus…"
                         : activityPhase.kind === "await_focus"
@@ -1119,46 +1491,41 @@ export default function MissionsCreatePage() {
                           ? `Pick 1-${activityPhase.options.length}, or type your own focus…`
                           : "Paste a question, name a topic, or say you’re not sure…"
                     }
-                    className="flex-1 rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-slate-400 focus:bg-white focus:outline-none disabled:opacity-60"
+                    className="min-h-11 flex-1 resize-y rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-slate-400 focus:bg-white focus:outline-none disabled:opacity-60"
                   />
-                  <button type="submit" disabled={chatBusy || !chatInput.trim()} className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-40">
+                  <button type="submit" disabled={chatBusy || pendingQuestionBatch?.stage === "choose_group" || !chatInput.trim()} className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-40">
                     {chatBusy ? "Creating…" : "Create"}
                   </button>
                 </form>
                 {chatError ? <p className="px-4 pb-3 text-xs text-rose-600">{chatError}</p> : null}
               </>
             ) : null}
-          </>
-        ) : null}
-
-        {/* ── Manual form ────────────────────────────────────────────────── */}
-        {selectedTraining && view === "manual" ? (
-          <form ref={manualFormRef} onSubmit={handleFormCreate} className="space-y-4 px-5 py-5">
-            <p className="text-xs text-slate-400">Create a blank draft and fill in the fields yourself in the editor.</p>
-            <label className="flex flex-col gap-1 text-xs text-slate-600">
-              <span className="font-medium">Content type</span>
-              <select value={formContentType} onChange={(e) => setFormContentType(e.target.value as DraftContentType)} disabled={formCreating} className="rounded-md border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm text-slate-900 focus:border-slate-400 focus:bg-white focus:outline-none disabled:opacity-60">
-                <option value="activity">Quick practice questions (Activity)</option>
-                <option value="mission">Story-based mission (Mission)</option>
-              </select>
-            </label>
-            <label className="flex flex-col gap-1 text-xs text-slate-600">
-              <span className="font-medium">Title <span className="font-normal text-slate-400">(optional)</span></span>
-              <input type="text" value={formTitle} onChange={(e) => setFormTitle(e.target.value)} disabled={formCreating} placeholder="Untitled" maxLength={300} className="rounded-md border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-slate-400 focus:bg-white focus:outline-none disabled:opacity-60" />
-            </label>
-            <div className="flex items-center gap-3 pt-1">
-              <button type="submit" disabled={formCreating} className="rounded-md bg-slate-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-60">{formCreating ? "Creating…" : "Create blank draft"}</button>
-              {formError ? <span className="text-xs text-rose-600">{formError}</span> : null}
-            </div>
-          </form>
+            </section>
+            {manualDraftForm}
+          </div>
         ) : null}
       </div>
 
-      {/* Draft list */}
-      <section>
-        <h2 className="mb-3 text-sm font-semibold text-slate-600">Your drafts</h2>
-        {loadingDrafts ? <p className="text-sm text-slate-400">Loading…</p> : fetchError ? <p className="text-sm text-rose-600">{fetchError}</p> : <DraftList drafts={drafts} trainings={draftTrainings} onResumeTraining={resumeTraining} />}
-      </section>
+      {/* Subject workspace */}
+      {selectedTraining ? (
+        <SubjectWorkspace
+          training={selectedTraining}
+          groups={groups}
+          uncategorized={uncategorized}
+          drafts={drafts}
+          loadingGroups={loadingGroups}
+          groupsError={groupsError}
+          loadingDrafts={loadingDrafts}
+          draftsError={fetchError}
+          onAddQuestion={handleAddQuestionHere}
+        />
+      ) : (
+        <section>
+          <h2 className="mb-3 text-sm font-semibold text-slate-600">Your drafts</h2>
+          {loadingDrafts ? <p className="text-sm text-slate-400">Loading…</p> : fetchError ? <p className="text-sm text-rose-600">{fetchError}</p> : <DraftList drafts={drafts} trainings={draftTrainings} onResumeTraining={resumeTraining} />}
+        </section>
+      )}
+      {selectedTraining ? <ActivityGroupsJumpLink /> : null}
     </main>
   );
 }
