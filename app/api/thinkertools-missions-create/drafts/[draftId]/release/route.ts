@@ -72,6 +72,16 @@ export async function POST(request: Request, context: RouteContext) {
       );
     }
 
+    if (draft.contentType === "activity" && !draft.activityGroupId) {
+      return jsonError(
+        "Assign an activity group before making this question live.",
+        {
+          status: 409,
+          code: "AUTHORING_RELEASE_ACTIVITY_GROUP_REQUIRED",
+        },
+      );
+    }
+
     // --- Determine the table to update ---
     const tableName = draft.contentType === "mission" ? "missions" : "training_activities";
 

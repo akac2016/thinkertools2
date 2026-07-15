@@ -23,4 +23,5 @@ export type ContentDraft = {
   updatedAt: string;
   trainingTitle?: string | null;
   activityGroupTitle?: string | null;
+  publishedActivityStatus?: "pending" | "live" | null;
 };

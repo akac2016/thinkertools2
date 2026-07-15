@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import { parseWithSchema, unexpectedError } from "@/lib/api/route-utils";
 import { requireActorIdFromRequest } from "@/lib/auth/actor";
+import { deriveActivityAuthoringState } from "@/lib/authoring/activity-authoring-state";
 import { missionBodySchema } from "@/lib/authoring/mission-schema";
 import { getDraftById, updateDraft } from "@/lib/authoring/server";
 import { validateDraft } from "@/lib/authoring/validation";
@@ -116,6 +117,21 @@ export async function POST(request: Request, context: RouteContext) {
       return jsonError("You do not have permission to access this draft", {
         status: 403,
         code: "AUTHORING_DRAFT_FORBIDDEN",
+      });
+    }
+
+    const activityAuthoringState = deriveActivityAuthoringState({
+      subjectTrainingId: draft.primaryTrainingId,
+      selectedContentType: draft.contentType,
+      hasDraft: true,
+      activityGroupId: draft.activityGroupId,
+      draftStatus: draft.status,
+    });
+
+    if (draft.contentType === "activity" && activityAuthoringState.needsActivityGroup) {
+      return jsonError("Assign this draft to an activity group before publishing.", {
+        status: 409,
+        code: "AUTHORING_ACTIVITY_GROUP_REQUIRED",
       });
     }
 
